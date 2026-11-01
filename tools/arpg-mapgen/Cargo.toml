@@ -1,0 +1,8 @@
+[package]
+name = "arpg-mapgen"
+version = "0.1.0"
+edition = "2021"
+description = "Deterministic Procedural Map Generator, Heightfield Synthesizer & Pathability Verifier for BAR Sci-Fi ARPG (Wreckage Protocol)"
+license = "GPL-2.0-or-later"
+
+[dependencies]
