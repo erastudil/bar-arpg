@@ -29,6 +29,8 @@ end
 
 local activeReclaims = {} -- [featureID] = { builderID, builderTeam, maxMetal, lastMetal, lastFrame, isBossWreck, isJackpot, defenseTriggered, accumFraction }
 local bossWrecks = {} -- [featureID] = { biomeId, title, jackpotMaterials, x, z }
+local subsystemWrecks = {} -- [featureID] = { bossUnitID, subsystemDef, x, z }
+local lazarusWrecks = {} -- [featureID] = { unitDefName, x, z, spawnFrame, reanimateFrame, beingStripped }
 
 -- Sorted part drop pools by Tech Tier so Boss & Jackpot wrecks award tangible hardware
 local TierPartPools = {
@@ -109,10 +111,63 @@ local function registerBossWreck(featureID, biomeId, x, z)
 	end
 end
 
+-- Wave 8: Register a severed Boss Subsystem wreck that disables a Boss attack & awards its signature part when reclaimed
+local function registerSubsystemWreck(featureID, bossUnitID, subsystemDef, x, z)
+	if not featureID or not subsystemDef then
+		return
+	end
+	local metal = subsystemDef.metal or 1800
+	subsystemWrecks[featureID] = {
+		featureID = featureID,
+		bossUnitID = bossUnitID,
+		subsystemDef = subsystemDef,
+		x = x or 2048,
+		z = z or 2048,
+	}
+	if GG and GG.ARPG_Map and GG.ARPG_Map.wreckRegistry then
+		GG.ARPG_Map.wreckRegistry[featureID] = {
+			featureID = featureID,
+			isJackpot = true,
+			isBossWreck = false,
+			isSubsystemWreck = true,
+			metal = metal,
+			energy = metal * 0.75,
+			tier = 3,
+			x = x,
+			z = z,
+		}
+	end
+	if Spring and Spring.SetFeatureResources then
+		Spring.SetFeatureResources(featureID, metal, metal, metal * 0.75, metal * 0.75, 1.0, 240)
+	end
+end
+
+-- Wave 6: Track combat wrecks for Lazarus Nanite Reanimation (18s re-assembly unless stripped via Reclaim)
+local function trackCombatWreck(featureID, unitDefName, x, z, spawnFrame)
+	if not featureID then
+		return
+	end
+	local frame = spawnFrame or ((Spring and Spring.GetGameFrame and Spring.GetGameFrame()) or 0)
+	lazarusWrecks[featureID] = {
+		featureID = featureID,
+		unitDefName = unitDefName or "armpw",
+		x = x or 2048,
+		z = z or 2048,
+		spawnFrame = frame,
+		reanimateFrame = frame + 540, -- 18 seconds at 30 fps
+		beingStripped = false,
+	}
+end
+
 function gadget:AllowFeatureBuildStep(builderID, builderTeam, featureID, featureDefID, step)
 	-- Positive step is construction/resurrection; negative step is Reclaim!
 	if step >= 0 then
 		return true
+	end
+
+	-- Corpse-Denial Tactics: Channeling reclaim on a Lazarus wreck halts nanite re-assembly!
+	if lazarusWrecks[featureID] then
+		lazarusWrecks[featureID].beingStripped = true
 	end
 
 	local frame = (Spring and Spring.GetGameFrame and Spring.GetGameFrame()) or 0
@@ -126,9 +181,11 @@ function gadget:AllowFeatureBuildStep(builderID, builderTeam, featureID, feature
 
 	local mapReg = (GG and GG.ARPG_Map and GG.ARPG_Map.wreckRegistry and GG.ARPG_Map.wreckRegistry[featureID]) or nil
 	local bossReg = bossWrecks[featureID]
+	local subReg = subsystemWrecks[featureID]
 	local isBossWreck = (bossReg ~= nil) or (mapReg and mapReg.isBossWreck) or false
+	local isSubsystemWreck = (subReg ~= nil) or (mapReg and mapReg.isSubsystemWreck) or false
 	local isOverclockedReactor = (mapReg and mapReg.isOverclockedReactor) or false
-	local isJackpot = isBossWreck or isOverclockedReactor or (mapReg and mapReg.isJackpot) or false
+	local isJackpot = isBossWreck or isSubsystemWreck or isOverclockedReactor or (mapReg and mapReg.isJackpot) or false
 
 	local rec = activeReclaims[featureID]
 	if not rec then
@@ -139,6 +196,7 @@ function gadget:AllowFeatureBuildStep(builderID, builderTeam, featureID, feature
 			lastMetal = metalLeft or 100,
 			lastFrame = frame,
 			isBossWreck = isBossWreck,
+			isSubsystemWreck = isSubsystemWreck,
 			isOverclockedReactor = isOverclockedReactor,
 			isJackpot = isJackpot,
 			defenseTriggered = false,
@@ -256,6 +314,17 @@ function gadget:FeatureDestroyed(featureID)
 				if GG.ARPG_ZoneManager and GG.ARPG_ZoneManager.OnBossWreckSalvaged then
 					GG.ARPG_ZoneManager.OnBossWreckSalvaged(builderID, featureID)
 				end
+			elseif rec.isSubsystemWreck and subsystemWrecks[featureID] then
+				-- Wave 8: Severed Boss Subsystem reclaimed mid-fight!
+				-- Permanently disables that Boss subsystem attack and awards the Boss's signature weapon/part!
+				local subInfo = subsystemWrecks[featureID]
+				local subDef = subInfo.subsystemDef
+				if subDef and subDef.awardPartId then
+					GG.ARPG_Assembly.GrantPartDrop(builderID, subDef.awardPartId)
+				end
+				if GG.ARPG_Director and GG.ARPG_Director.DisableBossSubsystem then
+					GG.ARPG_Director.DisableBossSubsystem(subInfo.bossUnitID, subDef.id, subDef.disabledAttack)
+				end
 			elseif rec.isJackpot then
 				-- High-value Foundry Cache / Elite Wreck drops a part from current tier
 				local pool = TierPartPools[tier] or TierPartPools[1]
@@ -272,17 +341,55 @@ function gadget:FeatureDestroyed(featureID)
 
 	activeReclaims[featureID] = nil
 	bossWrecks[featureID] = nil
+	subsystemWrecks[featureID] = nil
+	lazarusWrecks[featureID] = nil
 	if GG and GG.ARPG_Map and GG.ARPG_Map.wreckRegistry then
 		GG.ARPG_Map.wreckRegistry[featureID] = nil
+	end
+end
+
+-- Wave 6: Lazarus Nanite Reanimation (un-reclaimed wrecks re-assemble after 18s unless stripped via Reclaim)
+function gadget:GameFrame(n)
+	local zone = GG and GG.ARPG_Map and GG.ARPG_Map.GetCurrentZone and GG.ARPG_Map.GetCurrentZone()
+	local isLazarusActive = (zone and zone.modifierId == "lazarus_nanite_reanimation") or false
+	if not isLazarusActive then
+		return
+	end
+
+	for featureID, lw in pairs(lazarusWrecks) do
+		local rec = activeReclaims[featureID]
+		local activelyReclaimed = (rec ~= nil and (n - rec.lastFrame <= 15)) or lw.beingStripped
+		if not activelyReclaimed and n >= lw.reanimateFrame then
+			lazarusWrecks[featureID] = nil
+			if Spring and Spring.DestroyFeature then
+				Spring.DestroyFeature(featureID)
+			end
+			if Spring and Spring.CreateUnit then
+				local enemyTeam = (Spring.GetGaiaTeamID and Spring.GetGaiaTeamID()) or 1
+				local y = (Spring.GetGroundHeight and Spring.GetGroundHeight(lw.x, lw.z)) or 120
+				local uID = Spring.CreateUnit(lw.unitDefName, lw.x, y, lw.z, 0, enemyTeam)
+				if uID and Spring.GetUnitHealth and Spring.SetUnitHealth then
+					local _, maxH = Spring.GetUnitHealth(uID)
+					if maxH then
+						Spring.SetUnitHealth(uID, maxH * 0.65)
+					end
+				end
+			end
+		end
 	end
 end
 
 GG = GG or {}
 GG.ARPG_Salvage = {
 	RegisterBossWreck = registerBossWreck,
+	RegisterSubsystemWreck = registerSubsystemWreck,
+	TrackCombatWreck = trackCombatWreck,
 	ComputeMaterialYieldFromMetal = computeMaterialYieldFromMetal,
 	GetActiveReclaim = function(featureID)
 		return activeReclaims[featureID]
+	end,
+	GetLazarusWreck = function(featureID)
+		return lazarusWrecks[featureID]
 	end,
 }
 

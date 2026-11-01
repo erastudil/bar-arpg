@@ -17,6 +17,7 @@ end
 local BiomeConfig = VFS and VFS.Include and VFS.Include("luarules/configs/arpg_biomes.lua")
 	or require("luarules/configs/arpg_biomes")
 local Biomes = BiomeConfig.Biomes
+local BossSubsystems = BiomeConfig.BossSubsystems or {}
 
 if gadgetHandler and not gadgetHandler:IsSyncedCode() then
 	return false
@@ -232,6 +233,9 @@ local function spawnZoneEncounters(blueprint)
 			biomeId = blueprint.biomeId,
 			x = bossArena.x,
 			z = bossArena.z,
+			shearedSubsystems = {},
+			disabledSubsystems = {},
+			disabledAttacks = {},
 		}
 		if Spring and Spring.SetGameRulesParam then
 			Spring.SetGameRulesParam("arpg_boss_unit_id", bossID)
@@ -239,6 +243,99 @@ local function spawnZoneEncounters(blueprint)
 			Spring.SetGameRulesParam("arpg_boss_title", biome.bossTitle)
 		end
 	end
+
+	-- 3. Wave 6: Spawn Procedural Armored Supply Convoy / Scrap Train
+	local convoy = blueprint.convoyRoute
+	if convoy and convoy.waypoints and #convoy.waypoints > 0 then
+		local wp1 = convoy.waypoints[1]
+		local crawlerDef = resolveValidUnitDefName(convoy.crawlerUnit, "corgol")
+		for c = 1, (convoy.crawlerCount or 2) do
+			local cx = wp1.x + (c - 1) * 55
+			local cz = wp1.z + (c - 1) * 35
+			local cy = (Spring and Spring.GetGroundHeight and Spring.GetGroundHeight(cx, cz)) or biome.baseHeight
+			if Spring and Spring.CreateUnit then
+				local cID = Spring.CreateUnit(crawlerDef, cx, cy, cz, 0, enemyTeam)
+				if cID then
+					activeEnemies[cID] = {
+						isElite = true,
+						isBoss = false,
+						isConvoyCrawler = true,
+						biomeId = blueprint.biomeId,
+						convoyJackpotMetal = convoy.jackpotMetal or 1800,
+					}
+					if Spring.GiveOrderToUnit and CMD and CMD.MOVE then
+						for w = 2, #convoy.waypoints do
+							local wp = convoy.waypoints[w]
+							Spring.GiveOrderToUnit(cID, CMD.MOVE, { wp.x, wp.elevation or biome.baseHeight, wp.z }, { "shift" })
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+-- Wave 8: Multi-Phase Boss Subsystem Part-Break (shears off physical component wrecks at 66% and 33% HP)
+local function checkBossSubsystemBreaks(bossID, curHealth, maxHealth)
+	local info = activeEnemies[bossID]
+	if not info or not info.isBoss then
+		return nil
+	end
+	local subs = BossSubsystems[info.biomeId] or BossSubsystems.salvage_yard
+	if not subs then
+		return nil
+	end
+	local hpRatio = curHealth / math.max(1.0, maxHealth)
+	local spawnedWrecks = {}
+
+	for i = 1, #subs do
+		local sub = subs[i]
+		if hpRatio <= sub.hpThreshold and not info.shearedSubsystems[sub.id] then
+			info.shearedSubsystems[sub.id] = true
+			local bx, bz = info.x or 3200, info.z or 3200
+			if Spring and Spring.GetUnitPosition then
+				local px, _, pz = Spring.GetUnitPosition(bossID)
+				if px then
+					bx, bz = px, pz
+				end
+			end
+			local angle = (i - 1) * math.pi + 0.4
+			local wx = bx + math.cos(angle) * 85
+			local wz = bz + math.sin(angle) * 85
+			local wy = (Spring and Spring.GetGroundHeight and Spring.GetGroundHeight(wx, wz)) or 160
+			local fID = nil
+			if Spring and Spring.CreateFeature then
+				fID = Spring.CreateFeature(sub.wreckFeature or "armcom_dead", wx, wy, wz, 0, getEnemyTeamID())
+			end
+			if not fID then
+				fID = 60000 + bossID * 10 + i
+			end
+			if GG and GG.ARPG_Salvage and GG.ARPG_Salvage.RegisterSubsystemWreck then
+				GG.ARPG_Salvage.RegisterSubsystemWreck(fID, bossID, sub, wx, wz)
+			end
+			spawnedWrecks[#spawnedWrecks + 1] = {
+				featureID = fID,
+				subsystemId = sub.id,
+				name = sub.name,
+				awardPartId = sub.awardPartId,
+			}
+		end
+	end
+	return spawnedWrecks
+end
+
+local function disableBossSubsystem(bossID, subsystemId, disabledAttack)
+	local info = activeEnemies[bossID]
+	if not info then
+		return false
+	end
+	info.disabledSubsystems = info.disabledSubsystems or {}
+	info.disabledAttacks = info.disabledAttacks or {}
+	info.disabledSubsystems[subsystemId] = true
+	if disabledAttack then
+		info.disabledAttacks[disabledAttack] = true
+	end
+	return true
 end
 
 -- Spawns converging scavenger ambush packs when the player channels reclaim on a Boss Jackpot Wreck
@@ -289,6 +386,16 @@ function gadget:UnitPreDamaged(unitID, unitDefID, unitTeam, damage, paralyzer, w
 		end
 	end
 	return damage, 1.0
+end
+
+function gadget:UnitDamaged(unitID, unitDefID, unitTeam, damage, paralyzer, weaponDefID, attackerID)
+	local info = activeEnemies[unitID]
+	if info and info.isBoss and Spring and Spring.GetUnitHealth then
+		local curH, maxH = Spring.GetUnitHealth(unitID)
+		if curH and maxH then
+			checkBossSubsystemBreaks(unitID, curH, maxH)
+		end
+	end
 end
 
 function gadget:UnitDestroyed(unitID, unitDefID, unitTeam, attackerID)
@@ -394,6 +501,11 @@ GG.ARPG_Director = {
 	SpawnZoneEncounters = spawnZoneEncounters,
 	SpawnSalvageDefenseWave = spawnSalvageDefenseWave,
 	ScheduleTelegraph = scheduleTelegraph,
+	CheckBossSubsystemBreaks = checkBossSubsystemBreaks,
+	DisableBossSubsystem = disableBossSubsystem,
+	GetEnemyInfo = function(unitID)
+		return activeEnemies[unitID]
+	end,
 	GetActiveTelegraphs = function()
 		return activeTelegraphs
 	end,

@@ -22,6 +22,8 @@ local BiomeConfig = VFS and VFS.Include and VFS.Include("luarules/configs/arpg_b
 local Biomes = BiomeConfig.Biomes
 local BiomeSequence = BiomeConfig.BiomeSequence
 local SetpieceTypes = BiomeConfig.SetpieceTypes
+local ZoneModifiers = BiomeConfig.ZoneModifiers or {}
+local ZoneModifierSequence = BiomeConfig.ZoneModifierSequence or { "lazarus_nanite_reanimation" }
 
 -- ============================================================================
 -- Deterministic PRNG (Bit-exact across Lua 5.1 / LuaJIT / Lua 5.3)
@@ -183,7 +185,7 @@ end
 -- ============================================================================
 -- Pure Blueprint & Heightfield Synthesis
 -- ============================================================================
-local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOverride)
+local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOverride, modifierIdOverride)
 	zoneDepth = math.max(1, tonumber(zoneDepth) or 1)
 	mapSizeX = tonumber(mapSizeX) or 4096
 	mapSizeZ = tonumber(mapSizeZ) or 4096
@@ -192,6 +194,8 @@ local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOv
 	local biomeId = biomeIdOverride or BiomeSequence[((zoneDepth - 1) % #BiomeSequence) + 1]
 	local biome = Biomes[biomeId] or Biomes.salvage_yard
 	local topology = biome.topology or "open_scrapyard_bowls"
+	local modifierId = modifierIdOverride or ZoneModifierSequence[((zoneDepth - 1) % #ZoneModifierSequence) + 1]
+	local zoneModifier = ZoneModifiers[modifierId] or ZoneModifiers.lazarus_nanite_reanimation
 
 	local roomCount = rng:rangeInt(biome.roomCount.min, biome.roomCount.max)
 	local margin = math.min(mapSizeX, mapSizeZ) * 0.12
@@ -449,12 +453,59 @@ local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOv
 		end
 	end
 
+	-- Wave 6: Procedural Armored Supply Convoy / Scrap Train Route
+	local convoyWaypoints = {}
+	for i = 2, math.max(2, roomCount - 2) do
+		convoyWaypoints[#convoyWaypoints + 1] = {
+			nodeId = nodes[i].id,
+			x = nodes[i].x,
+			z = nodes[i].z,
+			elevation = nodes[i].elevation,
+		}
+	end
+	local convoyRoute = {
+		id = "scrap_train_" .. tostring(zoneDepth),
+		name = "Armored Scrap-Train Convoy",
+		crawlerUnit = (biome.eliteUnits and biome.eliteUnits[1]) or "corgol",
+		escortUnit = (biome.swarmUnits and biome.swarmUnits[1]) or "armpw",
+		crawlerCount = 2 + math.floor(zoneDepth / 3),
+		speed = 42.0,
+		jackpotMetal = (biome.ambientMetalPerWreck and biome.ambientMetalPerWreck.max or 600) * 3.0,
+		waypoints = convoyWaypoints,
+	}
+
+	-- Wave 6: Destructible Choke Bridges & Collapsible Canyon Overhangs
+	local destructibleBridges = {}
+	for i = 1, #edges do
+		local edge = edges[i]
+		local u = nodes[edge.from]
+		local v = nodes[edge.to]
+		if (u.kind == "choke_point" or v.kind == "choke_point" or (#destructibleBridges == 0 and i == 2)) and #destructibleBridges < 2 then
+			local bx = (u.x + v.x) * 0.5
+			local bz = (u.z + v.z) * 0.5
+			destructibleBridges[#destructibleBridges + 1] = {
+				id = #destructibleBridges + 1,
+				fromNode = edge.from,
+				toNode = edge.to,
+				name = (topology == "switchback_canyons") and "Collapsible Canyon Overhang" or "Destructible Choke Bridge",
+				x = bx,
+				z = bz,
+				radius = 125.0,
+				dropDepth = 110.0,
+				crushDamage = 1800 + zoneDepth * 450,
+				collapsed = false,
+			}
+		end
+	end
+
 	return {
 		seed = seed,
 		zoneDepth = zoneDepth,
 		biomeId = biomeId,
 		biome = biome,
 		topology = topology,
+		modifierId = modifierId,
+		zoneModifier = zoneModifier,
 		mapSizeX = mapSizeX,
 		mapSizeZ = mapSizeZ,
 		nodes = nodes,
@@ -466,6 +517,8 @@ local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOv
 		setpieces = setpieces,
 		hazardZones = hazardZones,
 		encounterPacks = encounterPacks,
+		convoyRoute = convoyRoute,
+		destructibleBridges = destructibleBridges,
 	}
 end
 
@@ -541,6 +594,21 @@ local function SampleZoneHeight(blueprint, x, z)
 				if pd <= pil.radius * 1.25 then
 					local pBlend = 1.0 - smoothstep(math.max(0.0, (pd - pil.radius * 0.65) / (pil.radius * 0.60)))
 					h = lerp(h, pil.height, pBlend)
+				end
+			end
+		end
+	end
+
+	-- Wave 6: Apply terrain chasm drop for collapsed Destructible Choke Bridges
+	local bridges = blueprint.destructibleBridges
+	if bridges then
+		for b = 1, #bridges do
+			local br = bridges[b]
+			if br.collapsed then
+				local bd = math.sqrt((x - br.x) ^ 2 + (z - br.z) ^ 2)
+				if bd <= br.radius then
+					local cBlend = 1.0 - smoothstep(bd / math.max(1.0, br.radius))
+					h = h - br.dropDepth * cBlend
 				end
 			end
 		end
@@ -716,15 +784,18 @@ if gadgetHandler and gadgetHandler:IsSyncedCode() then
 			spSetGameRulesParam("arpg_extract_z", math.floor(blueprint.extractionGate.z))
 			spSetGameRulesParam("arpg_wreck_count", #blueprint.plannedWrecks)
 			spSetGameRulesParam("arpg_setpiece_count", #blueprint.setpieces)
+			spSetGameRulesParam("arpg_zone_modifier", blueprint.modifierId or "lazarus_nanite_reanimation")
+			spSetGameRulesParam("arpg_bridge_count", #(blueprint.destructibleBridges or {}))
 		end
 
 		if spEcho then
 			spEcho(
 				string.format(
-					"[ARPG ProcGen] Generated Zone #%d (%s / %s) | Seed=%d | Rooms=%d | Wrecks=%d | Setpieces=%d",
+					"[ARPG ProcGen] Generated Zone #%d (%s / %s | Mod=%s) | Seed=%d | Rooms=%d | Wrecks=%d | Setpieces=%d",
 					blueprint.zoneDepth,
 					blueprint.biome.name,
 					blueprint.topology,
+					blueprint.modifierId or "none",
 					blueprint.seed,
 					#blueprint.nodes,
 					#blueprint.plannedWrecks,
@@ -734,10 +805,60 @@ if gadgetHandler and gadgetHandler:IsSyncedCode() then
 		end
 	end
 
-	function GG.ARPG_Map.GenerateZone(seed, zoneDepth, biomeIdOverride)
+	function GG.ARPG_Map.DetonateDestructibleBridge(bridgeId, attackerID)
+		local bp = GG.ARPG_Map.currentBlueprint
+		if not bp or not bp.destructibleBridges then
+			return false, "NO_ACTIVE_BRIDGES"
+		end
+		local targetBridge = nil
+		for i = 1, #bp.destructibleBridges do
+			if bp.destructibleBridges[i].id == bridgeId then
+				targetBridge = bp.destructibleBridges[i]
+				break
+			end
+		end
+		if not targetBridge or targetBridge.collapsed then
+			return false, "BRIDGE_ALREADY_COLLAPSED"
+		end
+		targetBridge.collapsed = true
+
+		-- Dynamically drop the terrain heightfield around the bridge in-place!
+		if spSetHeightMapFunc and spSetHeightMap then
+			local step = (Game and Game.squareSize or 8)
+			local minX = math.max(0, math.floor((targetBridge.x - targetBridge.radius) / step) * step)
+			local maxX = math.min(bp.mapSizeX, math.ceil((targetBridge.x + targetBridge.radius) / step) * step)
+			local minZ = math.max(0, math.floor((targetBridge.z - targetBridge.radius) / step) * step)
+			local maxZ = math.min(bp.mapSizeZ, math.ceil((targetBridge.z + targetBridge.radius) / step) * step)
+			spSetHeightMapFunc(function()
+				for z = minZ, maxZ, step do
+					for x = minX, maxX, step do
+						spSetHeightMap(x, z, SampleZoneHeight(bp, x, z))
+					end
+				end
+			end)
+		end
+
+		-- Crush any units inside the bridge collapse radius
+		local crushedCount = 0
+		if Spring and Spring.GetUnitsInCylinder and Spring.AddUnitDamage then
+			local units = Spring.GetUnitsInCylinder(targetBridge.x, targetBridge.z, targetBridge.radius)
+			if units then
+				for i = 1, #units do
+					local uID = units[i]
+					if uID ~= attackerID then
+						Spring.AddUnitDamage(uID, targetBridge.crushDamage, 0, attackerID or -1, -1)
+						crushedCount = crushedCount + 1
+					end
+				end
+			end
+		end
+		return true, crushedCount
+	end
+
+	function GG.ARPG_Map.GenerateZone(seed, zoneDepth, biomeIdOverride, modifierIdOverride)
 		local mapSizeX = (Game and Game.mapSizeX) or 4096
 		local mapSizeZ = (Game and Game.mapSizeZ) or 4096
-		local bp = BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOverride)
+		local bp = BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOverride, modifierIdOverride)
 		local ok, status = VerifyConnectivity(bp)
 		bp.connectivityVerified = ok
 		bp.connectivityStatus = status

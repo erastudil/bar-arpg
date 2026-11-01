@@ -458,4 +458,80 @@ gSalvage:FeatureDestroyed(bossWreckID)
 local advOk, bp2 = GG.ARPG_ZoneManager.AdvanceToNextZone()
 assertTrue(advOk and bp2.zoneDepth == 2, "Co-Op party advanced to Zone 2")
 print("[PASS] Test 5: 4-Player Co-Op Party, Shared Salvage Material Stream, and Zone Progression verified.")
+
+-- ============================================================================
+-- TEST 6: Wave 6 — Zone Modifiers, Convoy Route, Destructible Bridges, & Lazarus Nanite Reanimation
+-- ============================================================================
+local bpLaz = GG.ARPG_Map.GenerateZone(424242, 1, "salvage_yard", "lazarus_nanite_reanimation")
+assertTrue(bpLaz.modifierId == "lazarus_nanite_reanimation", "Zone modifier set to lazarus_nanite_reanimation")
+assertTrue(bpLaz.convoyRoute and #bpLaz.convoyRoute.waypoints >= 2, "Procedural Armored Supply Convoy route generated")
+assertTrue(bpLaz.destructibleBridges and #bpLaz.destructibleBridges >= 1, "Procedural Destructible Choke Bridges generated")
+
+local bridge1 = bpLaz.destructibleBridges[1]
+local hBeforeCollapse = modProcGen.SampleZoneHeight(bpLaz, bridge1.x, bridge1.z)
+local bridgeEnemy = Spring.CreateUnit("armpw", bridge1.x, hBeforeCollapse, bridge1.z, 0, 9)
+local detOk, crushedCount = GG.ARPG_Map.DetonateDestructibleBridge(bridge1.id, heroID)
+local hAfterCollapse = modProcGen.SampleZoneHeight(bpLaz, bridge1.x, bridge1.z)
+assertTrue(detOk and hAfterCollapse < hBeforeCollapse - 50, "Detonating Destructible Choke Bridge dropped terrain heightfield")
+assertTrue(crushedCount >= 1, "Bridge collapse crushed hostile pack standing on bridge")
+
+-- Lazarus Nanite Reanimation (18s / 540 frames) vs Corpse-Denial Reclaim
+local lazWreck1 = Spring.CreateFeature("armpw_dead", 1500, 120, 1500, 0, 9)
+local lazWreck2 = Spring.CreateFeature("armpw_dead", 1600, 120, 1500, 0, 9)
+GG.ARPG_Salvage.TrackCombatWreck(lazWreck1, "armpw", 1500, 1500, 100)
+GG.ARPG_Salvage.TrackCombatWreck(lazWreck2, "armpw", 1600, 1500, 100)
+
+-- Player channels reclaim on lazWreck1 (Corpse-Denial!) while leaving lazWreck2 un-reclaimed
+gSalvage:AllowFeatureBuildStep(heroID, 0, lazWreck1, 1, -0.2)
+gSalvage:GameFrame(650) -- Past 100 + 540 = 640 reanimate frame!
+assertTrue(GG.ARPG_Salvage.GetLazarusWreck(lazWreck1) ~= nil, "Reclaim channel halted Lazarus nanite reanimation on stripped wreck")
+assertTrue(GG.ARPG_Salvage.GetLazarusWreck(lazWreck2) == nil, "Un-reclaimed wreck reanimated after 18s (540 frames)")
+print("[PASS] Test 6: Wave 6 Zone Modifiers, Supply Convoy, Destructible Choke Bridges, and Lazarus Corpse-Denial Reclaim verified.")
+
+-- ============================================================================
+-- TEST 7: Wave 7 — Authentic BAR Hero Unit Def, LUS Unit Script, & ModOptions
+-- ============================================================================
+local heroUnitDefTable = dofile("units/arpg_hero_chassis.lua")
+assertTrue(heroUnitDefTable and heroUnitDefTable.arpg_hero_chassis ~= nil, "Loaded units/arpg_hero_chassis.lua")
+assertTrue(heroUnitDefTable.arpg_hero_chassis.builder == true and heroUnitDefTable.arpg_hero_chassis.canreclaim == true, "Hero chassis has native BAR reclaim lathe")
+assertTrue(#heroUnitDefTable.arpg_hero_chassis.weapons == 3, "Hero chassis exposes 3 modular weapon hardpoints")
+
+script = {}
+unitID = heroID
+dofile("scripts/arpg_hero_chassis.lua")
+script.Create()
+assertTrue(script.AimWeapon(1, 0.5, 0.1) == true, "LUS script.AimWeapon(1) aims primary hardpoint")
+script.FireWeapon(1)
+assertTrue(script.Killed(200, 4500) == 1, "LUS script.Killed returns valid corpse severity")
+
+local modOptsSchema = dofile("ModOptions.lua")
+assertTrue(type(modOptsSchema) == "table" and #modOptsSchema >= 6, "Loaded ModOptions.lua lobby configuration schema")
+print("[PASS] Test 7: Wave 7 Authentic BAR Hero Unit Definition, LUS Script, and ModOptions verified.")
+
+-- ============================================================================
+-- TEST 8: Wave 8 — Multi-Phase Boss Subsystem Part-Break & Mid-Fight Wreck Reclaim
+-- ============================================================================
+local activeHeroID = GG.ARPG_Hero.GetHeroUnitID(0)
+local activeHeroState = GG.ARPG_Assembly.GetHeroState(activeHeroID)
+GG.ARPG_Director.SpawnZoneEncounters(bpLaz)
+local newBossID = GG.ARPG_Director.GetActiveBossID()
+assertTrue(newBossID ~= nil, "Spawned Experimental Boss for Subsystem Part-Break test")
+
+-- Deal threshold damage dropping Boss to 60% HP (crosses 66% threshold)
+local brokenSubs = GG.ARPG_Director.CheckBossSubsystemBreaks(newBossID, 6000, 10000)
+assertTrue(brokenSubs and #brokenSubs >= 1, "Boss crossing 66% HP sheared off physical Subsystem Wreck")
+local subWreckID = brokenSubs[1].featureID
+
+-- Reclaim the severed Boss Subsystem wreck right under the Boss's feet
+features[subWreckID] = features[subWreckID] or { defName = "armcom_dead", x = 3200, y = 160, z = 3200, metal = 950, maxMetal = 950, energy = 700, maxEnergy = 700, reclaimLeft = 0.5 }
+gSalvage:AllowFeatureBuildStep(activeHeroID, 0, subWreckID, 1, -0.3)
+features[subWreckID].metal = 0
+features[subWreckID].reclaimLeft = 0.0
+gSalvage:FeatureDestroyed(subWreckID)
+
+local bossInfo = GG.ARPG_Director.GetEnemyInfo(newBossID)
+assertTrue(bossInfo and bossInfo.disabledSubsystems[brokenSubs[1].subsystemId] == true, "Reclaiming severed Subsystem Wreck permanently disabled Boss subsystem attack")
+assertTrue(activeHeroState.inventoryParts[brokenSubs[1].awardPartId] == true, "Reclaiming severed Subsystem Wreck awarded Boss signature part")
+print("[PASS] Test 8: Wave 8 Multi-Phase Boss Subsystem Part-Break & Mid-Fight Wreck Reclaim verified.")
+
 print("ALL BAR SCI-FI ARPG INTEGRATION TESTS PASSED (EXIT 0)")

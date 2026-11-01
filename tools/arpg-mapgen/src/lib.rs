@@ -1056,6 +1056,76 @@ pub fn export_lua_blueprint(bp: &ZoneBlueprint) -> String {
     lua
 }
 
+/// Generates a valid Spring / Recoil engine `_script.txt` launch configuration for solo or 1-4P Co-Op testing.
+pub fn generate_spring_launch_script(
+    seed: u64,
+    biome_id: &str,
+    chassis_id: &str,
+    modifier_id: &str,
+    coop_players: usize,
+) -> String {
+    let coop = coop_players.clamp(1, 4);
+    let mut script = String::new();
+    let _ = writeln!(script, "[GAME]");
+    let _ = writeln!(script, "{{");
+    let _ = writeln!(script, "\tMapName=Quicksilver Remake 1.24;");
+    let _ = writeln!(script, "\tGameType=Beyond All Reason - Wreckage Protocol ARPG 1.0;");
+    let _ = writeln!(script, "\tStartPosType=2;");
+    let _ = writeln!(script, "\tHostIP=127.0.0.1;");
+    let _ = writeln!(script, "\tHostPort=8452;");
+    let _ = writeln!(script, "\tMyPlayerName=Operator;");
+    let _ = writeln!(script, "\tIsHost=1;");
+    let _ = writeln!(script);
+    let _ = writeln!(script, "\t[MODOPTIONS]");
+    let _ = writeln!(script, "\t{{");
+    let _ = writeln!(script, "\t\tarpg_seed={};", seed);
+    let _ = writeln!(script, "\t\tarpg_starting_biome={};", biome_id);
+    let _ = writeln!(script, "\t\tarpg_starting_chassis={};", chassis_id);
+    let _ = writeln!(script, "\t\tarpg_zone_modifier={};", modifier_id);
+    let _ = writeln!(script, "\t\tarpg_coop_players={};", coop);
+    let _ = writeln!(script, "\t}}");
+    let _ = writeln!(script);
+
+    for p in 0..coop {
+        let _ = writeln!(script, "\t[PLAYER{}]", p);
+        let _ = writeln!(script, "\t{{");
+        let _ = writeln!(script, "\t\tName=Operator_{};", p + 1);
+        let _ = writeln!(script, "\t\tTeam={};", p);
+        let _ = writeln!(script, "\t\tSpectator=0;");
+        let _ = writeln!(script, "\t}}");
+        let _ = writeln!(script, "\t[TEAM{}]", p);
+        let _ = writeln!(script, "\t{{");
+        let _ = writeln!(script, "\t\tTeamLeader={};", p);
+        let _ = writeln!(script, "\t\tAllyTeam=0;");
+        let _ = writeln!(script, "\t\tSide=Armada;");
+        let _ = writeln!(script, "\t}}");
+    }
+
+    let _ = writeln!(script, "\t[AI0]");
+    let _ = writeln!(script, "\t{{");
+    let _ = writeln!(script, "\t\tName=WreckageDirector;");
+    let _ = writeln!(script, "\t\tShortName=NullAI;");
+    let _ = writeln!(script, "\t\tTeam={};", coop);
+    let _ = writeln!(script, "\t\tHost=0;");
+    let _ = writeln!(script, "\t}}");
+    let _ = writeln!(script, "\t[TEAM{}]", coop);
+    let _ = writeln!(script, "\t{{");
+    let _ = writeln!(script, "\t\tTeamLeader=0;");
+    let _ = writeln!(script, "\t\tAllyTeam=1;");
+    let _ = writeln!(script, "\t\tSide=Cortex;");
+    let _ = writeln!(script, "\t}}");
+    let _ = writeln!(script, "\t[ALLYTEAM0]");
+    let _ = writeln!(script, "\t{{");
+    let _ = writeln!(script, "\t\tNumAllies=0;");
+    let _ = writeln!(script, "\t}}");
+    let _ = writeln!(script, "\t[ALLYTEAM1]");
+    let _ = writeln!(script, "\t{{");
+    let _ = writeln!(script, "\t\tNumAllies=0;");
+    let _ = writeln!(script, "\t}}");
+    let _ = writeln!(script, "}}");
+    script
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

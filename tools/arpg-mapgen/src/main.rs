@@ -1,6 +1,6 @@
 use arpg_mapgen::{
-    build_zone_blueprint, export_lua_blueprint, render_ascii_map, render_html_map_atlas,
-    render_svg_map, verify_blueprint_and_grid_pathability,
+    build_zone_blueprint, export_lua_blueprint, generate_spring_launch_script, render_ascii_map,
+    render_html_map_atlas, render_svg_map, verify_blueprint_and_grid_pathability,
 };
 use std::env;
 use std::fs;
@@ -48,6 +48,34 @@ fn main() {
             println!(
                 "[arpg-mapgen] Generated 8-Biome Interactive Map Atlas at {}",
                 out_path
+            );
+        }
+        "launch-script" => {
+            let out_path = args
+                .get(2)
+                .map(|s| s.as_str())
+                .unwrap_or("out/wreckage_protocol_script.txt");
+            let seed: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(424_242);
+            let biome = args.get(4).map(|s| s.as_str()).unwrap_or("salvage_yard");
+            let chassis = args
+                .get(5)
+                .map(|s| s.as_str())
+                .unwrap_or("frame_assault_medium");
+            let modifier = args
+                .get(6)
+                .map(|s| s.as_str())
+                .unwrap_or("lazarus_nanite_reanimation");
+            let coop: usize = args.get(7).and_then(|s| s.parse().ok()).unwrap_or(1);
+            if let Some(parent) = Path::new(out_path).parent() {
+                if !parent.as_os_str().is_empty() {
+                    let _ = fs::create_dir_all(parent);
+                }
+            }
+            let script = generate_spring_launch_script(seed, biome, chassis, modifier, coop);
+            fs::write(out_path, script).expect("Failed to write Spring launch script");
+            println!(
+                "[arpg-mapgen] Generated Spring/Recoil launch script at {} (seed={}, biome={}, coop={})",
+                out_path, seed, biome, coop
             );
         }
         "generate" => {
