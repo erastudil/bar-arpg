@@ -1,12 +1,13 @@
 -- luarules/gadgets/arpg_procgen_map.lua
 -- Seeded Procedural Map Generation Engine for BAR Sci-Fi ARPG ("WRECKAGE PROTOCOL")
--- Transforms any BAR canvas map into a deterministic series of Scrap Frontier zones:
--- Salvage Yards -> Derelict Factories -> Automated War-Foundries -> Experimental Gantry Citadels.
+-- Supports 8 Scrap Frontier zone archetypes, topology-aware room placement,
+-- Setpiece Vaults (Locked Armory, Constructor Bay, Overclocked Reactor Wreck),
+-- slope-bounded corridors, cover pillars, and pre-seeded BAR wreck fields.
 
 function gadget:GetInfo()
 	return {
 		name = "ARPG Procedural Map Generator",
-		desc = "Deterministic multi-biome heightmap, corridor ramp, wreck field, and boss arena generator",
+		desc = "Deterministic 8-biome heightmap, corridor ramp, setpiece vault, wreck field, and boss arena generator",
 		author = "Argon",
 		date = "2026-11-01",
 		license = "GNU GPL, v2 or later",
@@ -20,9 +21,10 @@ local BiomeConfig = VFS and VFS.Include and VFS.Include("luarules/configs/arpg_b
 
 local Biomes = BiomeConfig.Biomes
 local BiomeSequence = BiomeConfig.BiomeSequence
+local SetpieceTypes = BiomeConfig.SetpieceTypes
 
 -- ============================================================================
--- Deterministic PRNG (Bit-exact across Lua 5.1 / LuaJIT)
+-- Deterministic PRNG (Bit-exact across Lua 5.1 / LuaJIT / Lua 5.3)
 -- ============================================================================
 local ProcRNG = {}
 ProcRNG.__index = ProcRNG
@@ -36,7 +38,6 @@ function ProcRNG.new(seed)
 end
 
 function ProcRNG:nextInt()
-	-- Park-Miller LCG (modulus 2^31 - 1, multiplier 48271) - exact in IEEE 754 double
 	self.state = (self.state * 48271) % 2147483647
 	return self.state
 end
@@ -74,6 +75,7 @@ local function hash2D(ix, iz, seed)
 end
 
 local function smoothstep(t)
+	t = math.max(0.0, math.min(1.0, t))
 	return t * t * (3.0 - 2.0 * t)
 end
 
@@ -120,9 +122,6 @@ local function domainWarpedNoise2D(x, z, freq, warpStrength, seed)
 	return fbm2D(wx * freq, wz * freq, seed + 97, 4)
 end
 
--- ============================================================================
--- Point-to-Segment Distance for Corridor & Ramp Carving
--- ============================================================================
 local function pointToSegmentProjection(px, pz, ax, az, bx, bz)
 	local dx = bx - ax
 	local dz = bz - az
@@ -140,7 +139,49 @@ local function pointToSegmentProjection(px, pz, ax, az, bx, bz)
 end
 
 -- ============================================================================
--- Pure Blueprint & Heightfield Synthesis (Usable in Synced Engine & Test Runner)
+-- Topology-Aware Coordinate Generator across the 8 Archetypes
+-- ============================================================================
+local function computeRoomPosition(topology, idx, middleCount, margin, mapSizeX, mapSizeZ, rng)
+	local progress = (idx - 1) / (middleCount + 2)
+	local spanX = mapSizeX - 2 * margin
+	local spanZ = mapSizeZ - 2 * margin
+	local baseX = margin + progress * spanX
+	local baseZ = margin + progress * spanZ
+	local minDim = math.min(mapSizeX, mapSizeZ)
+
+	if topology == "orthogonal_bays" then
+		-- Quantized grid-bay coordinates for Derelict Factory
+		local gridStep = 360.0
+		local orthoSign = (idx % 2 == 0) and 1 or -1
+		local rawX = baseX + orthoSign * 0.18 * minDim
+		local rawZ = baseZ - orthoSign * 0.18 * minDim
+		local qx = math.floor(rawX / gridStep + 0.5) * gridStep
+		local qz = math.floor(rawZ / gridStep + 0.5) * gridStep
+		return math.max(margin, math.min(mapSizeX - margin, qx)), math.max(margin, math.min(mapSizeZ - margin, qz))
+	elseif topology == "linear_spine_flanks" then
+		-- Tight central rail spine with service tunnel bays alongside it
+		local orthoSign = (idx % 2 == 0) and 1 or -1
+		local flankOffset = (idx % 3 == 0) and 0.04 or 0.14
+		local nx = baseX + orthoSign * flankOffset * minDim
+		local nz = baseZ - orthoSign * flankOffset * minDim
+		return math.max(margin, math.min(mapSizeX - margin, nx)), math.max(margin, math.min(mapSizeZ - margin, nz))
+	elseif topology == "switchback_canyons" then
+		-- Wide S-curve switchbacks across the badlands
+		local wave = math.sin(progress * math.pi * 2.5) * 0.28 * minDim
+		local nx = baseX + wave
+		local nz = baseZ - wave * 0.75
+		return math.max(margin, math.min(mapSizeX - margin, nx)), math.max(margin, math.min(mapSizeZ - margin, nz))
+	else
+		local orthoSign = (idx % 2 == 0) and 1 or -1
+		local orthoMag = rng:rangeFloat(0.12, 0.26) * minDim
+		local nx = baseX + orthoSign * orthoMag
+		local nz = baseZ - orthoSign * orthoMag
+		return math.max(margin, math.min(mapSizeX - margin, nx)), math.max(margin, math.min(mapSizeZ - margin, nz))
+	end
+end
+
+-- ============================================================================
+-- Pure Blueprint & Heightfield Synthesis
 -- ============================================================================
 local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOverride)
 	zoneDepth = math.max(1, tonumber(zoneDepth) or 1)
@@ -150,6 +191,7 @@ local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOv
 	local rng = ProcRNG.new(seed + zoneDepth * 7919)
 	local biomeId = biomeIdOverride or BiomeSequence[((zoneDepth - 1) % #BiomeSequence) + 1]
 	local biome = Biomes[biomeId] or Biomes.salvage_yard
+	local topology = biome.topology or "open_scrapyard_bowls"
 
 	local roomCount = rng:rangeInt(biome.roomCount.min, biome.roomCount.max)
 	local margin = math.min(mapSizeX, mapSizeZ) * 0.12
@@ -170,7 +212,6 @@ local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOv
 		pillars = {},
 	}
 
-	-- Intermediate Nodes arranged in progressive depth bands with lateral variance
 	local middleCount = roomCount - 3
 	local roomKinds = {
 		"salvage_field",
@@ -178,34 +219,26 @@ local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOv
 		"foundry_cache",
 		"salvage_field",
 		"hazard_gauntlet",
+		"setpiece_vault",
 	}
 
 	for i = 2, middleCount + 1 do
-		local progress = (i - 1) / (middleCount + 2)
 		local kind = roomKinds[((i - 2) % #roomKinds) + 1]
-		local baseX = margin + progress * (mapSizeX - 2 * margin)
-		local baseZ = margin + progress * (mapSizeZ - 2 * margin)
+		local nx, nz = computeRoomPosition(topology, i, middleCount, margin, mapSizeX, mapSizeZ, rng)
 
-		-- Alternate lateral offset across the diagonal spine for branching exploration
-		local orthoSign = (i % 2 == 0) and 1 or -1
-		local orthoMag = rng:rangeFloat(0.12, 0.28) * math.min(mapSizeX, mapSizeZ)
-		local nx = math.max(margin, math.min(mapSizeX - margin, baseX + orthoSign * orthoMag))
-		local nz = math.max(margin, math.min(mapSizeZ - margin, baseZ - orthoSign * orthoMag))
-
-		local radius = 250
+		local radius = 255
 		if kind == "salvage_field" then
 			radius = rng:rangeFloat(280, 340)
 		elseif kind == "choke_point" then
-			radius = rng:rangeFloat(190, 230)
-		elseif kind == "foundry_cache" then
-			radius = rng:rangeFloat(240, 290)
+			radius = rng:rangeFloat(195, 235)
+		elseif kind == "foundry_cache" or kind == "setpiece_vault" then
+			radius = rng:rangeFloat(245, 295)
 		elseif kind == "hazard_gauntlet" then
 			radius = rng:rangeFloat(250, 310)
 		end
 
-		-- Keep elevation transitions gentle so ramp slopes stay well below maxWalkableSlope
 		local prevElev = nodes[i - 1].elevation
-		local elevDelta = rng:rangeFloat(-16.0, 20.0)
+		local elevDelta = rng:rangeFloat(-15.0, 18.0)
 		local elevation = math.max(biome.baseHeight - 30.0, math.min(biome.baseHeight + 50.0, prevElev + elevDelta))
 
 		local pillars = {}
@@ -227,7 +260,7 @@ local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOv
 			z = nz,
 			radius = radius,
 			elevation = elevation,
-			hasGarage = (kind == "foundry_cache"),
+			hasGarage = (kind == "foundry_cache" or kind == "setpiece_vault"),
 			pillars = pillars,
 		}
 	end
@@ -244,7 +277,7 @@ local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOv
 		bossPillars[p] = {
 			x = bossX + math.cos(angle) * 195,
 			z = bossZ + math.sin(angle) * 195,
-			radius = 42,
+			radius = 40,
 			height = bossElev + 115,
 		}
 	end
@@ -259,6 +292,7 @@ local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOv
 		elevation = bossElev,
 		hasGarage = false,
 		pillars = bossPillars,
+		shieldSubnodes = (topology == "citadel_shield_nodes") and 3 or 0,
 	}
 
 	-- Node N: Extraction / Warp Gate
@@ -275,32 +309,33 @@ local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOv
 		pillars = {},
 	}
 
-	-- Primary Backbone Spine (Guarantees 100% connectivity from DropZone -> BossArena -> ExtractionGate)
+	local atan2 = math.atan2 or math.atan
+	local corridorWidthBase = (topology == "catwalk_bridges") and 115 or 135
+
+	-- Primary Backbone Spine (Guarantees 100% connectivity)
 	for i = 1, roomCount - 1 do
 		local u = nodes[i]
 		local v = nodes[i + 1]
 		local dist = math.sqrt((v.x - u.x) ^ 2 + (v.z - u.z) ^ 2)
 		local elevDiff = math.abs(v.elevation - u.elevation)
-		local atan2 = math.atan2 or math.atan
 		local slopeDeg = math.deg(atan2(elevDiff, math.max(120.0, dist)))
 		edges[#edges + 1] = {
 			from = i,
 			to = i + 1,
-			width = (v.kind == "boss_arena") and 165 or 135,
+			width = (v.kind == "boss_arena") and 165 or corridorWidthBase,
 			length = dist,
 			slopeDeg = slopeDeg,
 			isPrimary = true,
 		}
 	end
 
-	-- Secondary Loop Corridors (Provides tactical flanking & alternate salvage routes)
+	-- Secondary Loop Corridors
 	for i = 2, roomCount - 3 do
 		if rng:nextFloat() < 0.65 then
 			local u = nodes[i]
 			local v = nodes[i + 2]
 			local dist = math.sqrt((v.x - u.x) ^ 2 + (v.z - u.z) ^ 2)
 			local elevDiff = math.abs(v.elevation - u.elevation)
-			local atan2 = math.atan2 or math.atan
 			local slopeDeg = math.deg(atan2(elevDiff, math.max(120.0, dist)))
 			if slopeDeg <= biome.maxWalkableSlope then
 				edges[#edges + 1] = {
@@ -315,22 +350,36 @@ local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOv
 		end
 	end
 
-	-- Pre-compute Planned Wrecks, Hazard Telegraphs, and Encounter Spawns
+	-- Pre-compute Planned Wrecks, Setpiece Vaults, Hazard Telegraphs, and Encounter Packs
 	local plannedWrecks = {}
 	local hazardZones = {}
 	local encounterPacks = {}
+	local setpieces = {}
+	local setpieceCycle = {
+		"locked_armory_vault",
+		"live_constructor_bay",
+		"overclocked_reactor_wreck",
+	}
 
 	for i = 1, roomCount do
 		local node = nodes[i]
-		if node.kind == "salvage_field" or node.kind == "foundry_cache" or node.kind == "choke_point" then
-			local baseWrecks = (node.kind == "salvage_field") and 18 or ((node.kind == "foundry_cache") and 14 or 8)
+		if
+			node.kind == "salvage_field"
+			or node.kind == "foundry_cache"
+			or node.kind == "choke_point"
+			or node.kind == "setpiece_vault"
+		then
+			local baseWrecks = (node.kind == "salvage_field") and 18
+				or ((node.kind == "foundry_cache" or node.kind == "setpiece_vault") and 14 or 8)
 			local count = math.floor(baseWrecks * biome.wreckDensity)
 			for w = 1, count do
 				local angle = rng:rangeFloat(0, math.pi * 2.0)
 				local r = rng:rangeFloat(35, node.radius * 0.82)
 				local wx = node.x + math.cos(angle) * r
 				local wz = node.z + math.sin(angle) * r
-				local isJackpot = (node.kind == "foundry_cache" and w <= 3) or (w == 1 and rng:nextFloat() < 0.45)
+				local isJackpot = ((node.kind == "foundry_cache" or node.kind == "setpiece_vault") and w <= 3)
+					or (w == 1 and rng:nextFloat() < 0.45)
+				local isOverclockedReactor = (node.kind == "setpiece_vault" and w == 1)
 				local featureName = isJackpot and rng:choice(biome.jackpotWreckPool) or rng:choice(biome.wreckPool)
 				plannedWrecks[#plannedWrecks + 1] = {
 					nodeId = node.id,
@@ -339,6 +388,7 @@ local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOv
 					z = wz,
 					heading = rng:rangeInt(0, 65535),
 					isJackpot = isJackpot,
+					isOverclockedReactor = isOverclockedReactor,
 					metal = isJackpot and biome.ambientMetalPerWreck.max * 2.0
 						or rng:rangeInt(biome.ambientMetalPerWreck.min, biome.ambientMetalPerWreck.max),
 					energy = isJackpot and biome.ambientEnergyPerWreck.max * 2.0
@@ -346,6 +396,22 @@ local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOv
 					tier = biome.tier,
 				}
 			end
+		end
+
+		-- Assign deterministic Setpieces (Locked Armory, Constructor Repair Bay, Overclocked Reactor Wreck)
+		if node.kind == "foundry_cache" or node.kind == "setpiece_vault" then
+			local spKind = setpieceCycle[(#setpieces % #setpieceCycle) + 1]
+			local spDef = SetpieceTypes and SetpieceTypes[spKind]
+			setpieces[#setpieces + 1] = {
+				id = #setpieces + 1,
+				nodeId = node.id,
+				kind = spKind,
+				name = (spDef and spDef.name) or spKind,
+				x = node.x,
+				z = node.z,
+				radius = node.radius * 0.65,
+				completed = false,
+			}
 		end
 
 		if node.kind == "hazard_gauntlet" or node.kind == "boss_arena" then
@@ -377,6 +443,8 @@ local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOv
 				swarmCount = rng:rangeInt(6 + zoneDepth * 2, 11 + zoneDepth * 3),
 				eliteCount = rng:rangeInt(1, 2 + math.floor(zoneDepth / 2)),
 				turretCount = (node.kind == "choke_point") and rng:rangeInt(2, 3) or 0,
+				hasFabricatorGantry = (topology == "foundry_caldera" and node.kind == "foundry_cache"),
+				hasLockdownDoor = (topology == "orthogonal_bays" and node.kind == "choke_point"),
 			}
 		end
 	end
@@ -386,6 +454,7 @@ local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOv
 		zoneDepth = zoneDepth,
 		biomeId = biomeId,
 		biome = biome,
+		topology = topology,
 		mapSizeX = mapSizeX,
 		mapSizeZ = mapSizeZ,
 		nodes = nodes,
@@ -394,22 +463,20 @@ local function BuildZoneBlueprint(seed, zoneDepth, mapSizeX, mapSizeZ, biomeIdOv
 		bossArena = nodes[bossIdx],
 		extractionGate = nodes[extIdx],
 		plannedWrecks = plannedWrecks,
+		setpieces = setpieces,
 		hazardZones = hazardZones,
 		encounterPacks = encounterPacks,
 	}
 end
 
--- Evaluates height at world coordinate (x, z) for a generated ZoneBlueprint
 local function SampleZoneHeight(blueprint, x, z)
 	local biome = blueprint.biome
 	local nodes = blueprint.nodes
 	local edges = blueprint.edges
 
-	-- 1. Baseline cliff / canyon wall modulated by domain-warped noise
 	local nVal = domainWarpedNoise2D(x, z, biome.noiseFrequency, biome.domainWarpStrength, blueprint.seed)
 	local wallElev = biome.wallHeight + nVal * biome.noiseAmplitude
 
-	-- 2. Minimum blend factor across all Room Plateaus and Corridors (0.0 = flat walkable floor, 1.0 = cliff wall)
 	local bestFloorElev = biome.baseHeight
 	local minWallBlend = 1.0
 	local weightedElevSum = 0.0
@@ -462,11 +529,9 @@ local function SampleZoneHeight(blueprint, x, z)
 		bestFloorElev = weightedElevSum / weightSum
 	end
 
-	-- Add subtle micro-surface texture on walkable floors
 	local floorMicro = nVal * (biome.noiseAmplitude * 0.14)
 	local h = lerp(bestFloorElev + floorMicro, wallElev, minWallBlend)
 
-	-- 3. Apply tactical cover pillars inside Boss Arena & Choke Points
 	for i = 1, #nodes do
 		local pillars = nodes[i].pillars
 		if pillars then
@@ -484,9 +549,6 @@ local function SampleZoneHeight(blueprint, x, z)
 	return h
 end
 
--- ============================================================================
--- Graph Connectivity & Slope Verification Gate
--- ============================================================================
 local function VerifyConnectivity(blueprint)
 	local nodes = blueprint.nodes
 	local edges = blueprint.edges
@@ -531,9 +593,6 @@ local function VerifyConnectivity(blueprint)
 	return true, "CONNECTED_100_PERCENT"
 end
 
--- ============================================================================
--- Synced Engine Execution (Spring.SetHeightMapFunc & Spring.CreateFeature)
--- ============================================================================
 if gadgetHandler and gadgetHandler:IsSyncedCode() then
 	local spSetHeightMap = Spring.SetHeightMap
 	local spSetHeightMapFunc = Spring.SetHeightMapFunc
@@ -579,7 +638,6 @@ if gadgetHandler and gadgetHandler:IsSyncedCode() then
 		local mapSizeZ = Game.mapSizeZ or blueprint.mapSizeZ
 		local step = (Game.squareSize or 8) * 2
 
-		-- 1. Reshape entire terrain heightmap in a single batched engine pass
 		if spSetHeightMapFunc and spSetHeightMap then
 			spSetHeightMapFunc(function()
 				for z = 0, mapSizeZ, step do
@@ -603,7 +661,6 @@ if gadgetHandler and gadgetHandler:IsSyncedCode() then
 			end)
 		end
 
-		-- 2. Clear old features/wrecks on zone regeneration
 		GG.ARPG_Map.wreckRegistry = {}
 		if spGetAllFeatures and spDestroyFeature then
 			local existing = spGetAllFeatures()
@@ -614,7 +671,6 @@ if gadgetHandler and gadgetHandler:IsSyncedCode() then
 			end
 		end
 
-		-- 3. Spawn Pre-Seeded BAR Wreck Fields & Salvage Jackpots
 		local gaiaTeamID = Spring.GetGaiaTeamID and Spring.GetGaiaTeamID() or 0
 		if spCreateFeature then
 			for i = 1, #blueprint.plannedWrecks do
@@ -632,22 +688,25 @@ if gadgetHandler and gadgetHandler:IsSyncedCode() then
 							featureName = defName,
 							nodeId = w.nodeId,
 							isJackpot = w.isJackpot,
+							isOverclockedReactor = w.isOverclockedReactor or false,
 							isBossWreck = false,
 							metal = w.metal,
 							energy = w.energy,
 							tier = w.tier,
 							biomeId = blueprint.biomeId,
+							x = w.x,
+							z = w.z,
 						}
 					end
 				end
 			end
 		end
 
-		-- 4. Publish Zone Metadata to GameRulesParams for LuaUI HUD & Minimap Radar
 		if spSetGameRulesParam then
 			spSetGameRulesParam("arpg_zone_seed", blueprint.seed)
 			spSetGameRulesParam("arpg_zone_depth", blueprint.zoneDepth)
 			spSetGameRulesParam("arpg_zone_biome", blueprint.biomeId)
+			spSetGameRulesParam("arpg_zone_topology", blueprint.topology)
 			spSetGameRulesParam("arpg_zone_title", blueprint.biome.name)
 			spSetGameRulesParam("arpg_drop_x", math.floor(blueprint.dropZone.x))
 			spSetGameRulesParam("arpg_drop_z", math.floor(blueprint.dropZone.z))
@@ -656,17 +715,20 @@ if gadgetHandler and gadgetHandler:IsSyncedCode() then
 			spSetGameRulesParam("arpg_extract_x", math.floor(blueprint.extractionGate.x))
 			spSetGameRulesParam("arpg_extract_z", math.floor(blueprint.extractionGate.z))
 			spSetGameRulesParam("arpg_wreck_count", #blueprint.plannedWrecks)
+			spSetGameRulesParam("arpg_setpiece_count", #blueprint.setpieces)
 		end
 
 		if spEcho then
 			spEcho(
 				string.format(
-					"[ARPG ProcGen] Generated Zone #%d (%s) | Seed=%d | Rooms=%d | Wrecks=%d",
+					"[ARPG ProcGen] Generated Zone #%d (%s / %s) | Seed=%d | Rooms=%d | Wrecks=%d | Setpieces=%d",
 					blueprint.zoneDepth,
 					blueprint.biome.name,
+					blueprint.topology,
 					blueprint.seed,
 					#blueprint.nodes,
-					#blueprint.plannedWrecks
+					#blueprint.plannedWrecks,
+					#blueprint.setpieces
 				)
 			)
 		end

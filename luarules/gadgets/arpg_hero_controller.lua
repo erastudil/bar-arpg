@@ -326,6 +326,20 @@ end
 GG = GG or {}
 GG.ARPG_Hero = {
 	SpawnOrRelocateHero = spawnOrRelocateHero,
+	SpawnCoopParty = function(teamIDs, preserveState)
+		local spawned = {}
+		for i = 1, #(teamIDs or { 0 }) do
+			spawned[#spawned + 1] = spawnOrRelocateHero(teamIDs[i], preserveState)
+		end
+		return spawned
+	end,
+	GetAllHeroUnitIDs = function()
+		local list = {}
+		for _, uID in pairs(heroByTeam) do
+			list[#list + 1] = uID
+		end
+		return list
+	end,
 	GetHeroUnitID = function(teamID)
 		return heroByTeam[teamID or 0]
 	end,

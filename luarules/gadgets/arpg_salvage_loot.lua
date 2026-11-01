@@ -127,7 +127,8 @@ function gadget:AllowFeatureBuildStep(builderID, builderTeam, featureID, feature
 	local mapReg = (GG and GG.ARPG_Map and GG.ARPG_Map.wreckRegistry and GG.ARPG_Map.wreckRegistry[featureID]) or nil
 	local bossReg = bossWrecks[featureID]
 	local isBossWreck = (bossReg ~= nil) or (mapReg and mapReg.isBossWreck) or false
-	local isJackpot = isBossWreck or (mapReg and mapReg.isJackpot) or false
+	local isOverclockedReactor = (mapReg and mapReg.isOverclockedReactor) or false
+	local isJackpot = isBossWreck or isOverclockedReactor or (mapReg and mapReg.isJackpot) or false
 
 	local rec = activeReclaims[featureID]
 	if not rec then
@@ -138,6 +139,7 @@ function gadget:AllowFeatureBuildStep(builderID, builderTeam, featureID, feature
 			lastMetal = metalLeft or 100,
 			lastFrame = frame,
 			isBossWreck = isBossWreck,
+			isOverclockedReactor = isOverclockedReactor,
 			isJackpot = isJackpot,
 			defenseTriggered = false,
 			accumMetal = 0,
@@ -150,6 +152,16 @@ function gadget:AllowFeatureBuildStep(builderID, builderTeam, featureID, feature
 	rec.lastFrame = frame
 	rec.builderID = builderID
 	rec.accumMetal = rec.accumMetal + deltaMetal
+
+	-- Trigger Overclocked Reactor Wreck Telegraphed Plasma Shockwave on first reclaim step!
+	if isOverclockedReactor and not rec.defenseTriggered then
+		rec.defenseTriggered = true
+		local rx = (mapReg and mapReg.x) or 2048
+		local rz = (mapReg and mapReg.z) or 2048
+		if GG and GG.ARPG_Director and GG.ARPG_Director.ScheduleTelegraph then
+			GG.ARPG_Director.ScheduleTelegraph("overclocked_reactor_discharge", rx, rz, 165, 45, 190, nil)
+		end
+	end
 
 	-- Trigger Boss Wreck Salvage Defense Wave on first reclaim step!
 	if isBossWreck and not rec.defenseTriggered then
@@ -171,12 +183,18 @@ function gadget:AllowFeatureBuildStep(builderID, builderTeam, featureID, feature
 		end
 	end
 
-	-- Stream materials every ~30 metal reclaimed during the channel
+	-- Stream materials every ~30 metal reclaimed during the channel (shared across Co-Op party)
 	if rec.accumMetal >= 30 and GG and GG.ARPG_Assembly then
 		local zone = GG.ARPG_Map and GG.ARPG_Map.GetCurrentZone and GG.ARPG_Map.GetCurrentZone()
 		local biome = (zone and zone.biome) or Biomes.salvage_yard
 		local matYield = computeMaterialYieldFromMetal(rec.accumMetal, biome, isJackpot)
-		GG.ARPG_Assembly.AddMaterials(builderID, matYield)
+		local partyHeroes = (GG.ARPG_Hero and GG.ARPG_Hero.GetAllHeroUnitIDs and GG.ARPG_Hero.GetAllHeroUnitIDs()) or { builderID }
+		if #partyHeroes == 0 then
+			partyHeroes = { builderID }
+		end
+		for i = 1, #partyHeroes do
+			GG.ARPG_Assembly.AddMaterials(partyHeroes[i], matYield)
+		end
 
 		-- Apply Lazarus Reclaim-Siphon healing if mounted
 		local heroState = GG.ARPG_Assembly.GetHeroState(builderID)

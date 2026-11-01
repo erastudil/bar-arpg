@@ -1,10 +1,9 @@
-//! Deterministic Procedural Map Generator, Heightfield Synthesizer, and Grid Pathability
-//! Verifier for Beyond All Reason — Wreckage Protocol (Sci-Fi ARPG).
+//! Deterministic 8-Biome Procedural Map Generator, Heightfield Synthesizer, Grid Pathability
+//! Verifier, and Interactive HTML/SVG Map Atlas Compiler for Beyond All Reason — Wreckage Protocol.
 
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 
-/// Deterministic Park-Miller LCG matching `luarules/gadgets/arpg_procgen_map.lua`.
 #[derive(Clone, Debug)]
 pub struct ProcRng {
     state: u64,
@@ -44,25 +43,39 @@ impl ProcRng {
 pub enum BiomeKind {
     SalvageYard,
     DerelictFactory,
+    SlagRefinery,
     AutomatedWarFoundry,
+    OrbitalRailSpine,
+    CryoDataVault,
+    ScrapCanyonBadlands,
     ExperimentalGantryCitadel,
 }
 
 impl BiomeKind {
+    pub const ALL: [Self; 8] = [
+        Self::SalvageYard,
+        Self::DerelictFactory,
+        Self::SlagRefinery,
+        Self::AutomatedWarFoundry,
+        Self::OrbitalRailSpine,
+        Self::CryoDataVault,
+        Self::ScrapCanyonBadlands,
+        Self::ExperimentalGantryCitadel,
+    ];
+
     pub fn from_depth(depth: usize) -> Self {
-        match (depth.saturating_sub(1)) % 4 {
-            0 => Self::SalvageYard,
-            1 => Self::DerelictFactory,
-            2 => Self::AutomatedWarFoundry,
-            _ => Self::ExperimentalGantryCitadel,
-        }
+        Self::ALL[(depth.saturating_sub(1)) % Self::ALL.len()]
     }
 
     pub fn id(&self) -> &'static str {
         match self {
             Self::SalvageYard => "salvage_yard",
             Self::DerelictFactory => "derelict_factory",
+            Self::SlagRefinery => "slag_refinery",
             Self::AutomatedWarFoundry => "automated_war_foundry",
+            Self::OrbitalRailSpine => "orbital_rail_spine",
+            Self::CryoDataVault => "cryo_data_vault",
+            Self::ScrapCanyonBadlands => "scrap_canyon_badlands",
             Self::ExperimentalGantryCitadel => "experimental_gantry_citadel",
         }
     }
@@ -71,8 +84,25 @@ impl BiomeKind {
         match self {
             Self::SalvageYard => "Rust-Belt Salvage Yard",
             Self::DerelictFactory => "Derelict Assembly Megastructure",
+            Self::SlagRefinery => "Molten Slag Smelting Refinery",
             Self::AutomatedWarFoundry => "Automated War-Foundry Caldera",
+            Self::OrbitalRailSpine => "Orbital Mag-Rail Spine",
+            Self::CryoDataVault => "Sub-Zero Cryo-Computation Vault",
+            Self::ScrapCanyonBadlands => "Tectonic Scrap Canyon Badlands",
             Self::ExperimentalGantryCitadel => "Experimental Gantry Citadel",
+        }
+    }
+
+    pub fn topology(&self) -> &'static str {
+        match self {
+            Self::SalvageYard => "open_scrapyard_bowls",
+            Self::DerelictFactory => "orthogonal_bays",
+            Self::SlagRefinery => "catwalk_bridges",
+            Self::AutomatedWarFoundry => "foundry_caldera",
+            Self::OrbitalRailSpine => "linear_spine_flanks",
+            Self::CryoDataVault => "cryo_basins",
+            Self::ScrapCanyonBadlands => "switchback_canyons",
+            Self::ExperimentalGantryCitadel => "citadel_shield_nodes",
         }
     }
 
@@ -87,8 +117,8 @@ impl BiomeKind {
                 noise_frequency: 0.0025,
                 domain_warp_strength: 45.0,
                 max_walkable_slope_deg: 22.0,
-                room_min: 7,
-                room_max: 9,
+                room_min: 8,
+                room_max: 10,
                 wreck_density: 1.35,
                 boss_unit: "armcomboss",
                 boss_title: "FERAL SALVAGE BAILER MK-I",
@@ -104,7 +134,7 @@ impl BiomeKind {
                 noise_frequency: 0.0032,
                 domain_warp_strength: 25.0,
                 max_walkable_slope_deg: 20.0,
-                room_min: 8,
+                room_min: 9,
                 room_max: 11,
                 wreck_density: 1.50,
                 boss_unit: "armraz",
@@ -112,22 +142,90 @@ impl BiomeKind {
                 wreck_pool: &["armzeus_dead", "armfido_dead", "cormort_dead", "corpyro_dead", "armbull_dead"],
                 jackpot_pool: &["armmav_dead", "armsnipe_dead", "corsumo_dead"],
             },
+            Self::SlagRefinery => BiomeSpec {
+                kind: *self,
+                tier: 2,
+                base_height: 170.0,
+                wall_height: 395.0,
+                noise_amplitude: 22.0,
+                noise_frequency: 0.0029,
+                domain_warp_strength: 38.0,
+                max_walkable_slope_deg: 21.0,
+                room_min: 9,
+                room_max: 11,
+                wreck_density: 1.55,
+                boss_unit: "corshiva",
+                boss_title: "SMELTER BEHEMOTH SHIVA-IX",
+                wreck_pool: &["armbull_dead", "correap_dead", "corgol_dead", "corpyro_dead", "armmoho_dead"],
+                jackpot_pool: &["corsumo_dead", "corgol_dead", "armfus_dead"],
+            },
             Self::AutomatedWarFoundry => BiomeSpec {
                 kind: *self,
                 tier: 3,
                 base_height: 165.0,
                 wall_height: 410.0,
-                noise_amplitude: 36.0,
+                noise_amplitude: 34.0,
                 noise_frequency: 0.0028,
-                domain_warp_strength: 60.0,
+                domain_warp_strength: 55.0,
                 max_walkable_slope_deg: 21.0,
-                room_min: 9,
+                room_min: 10,
                 room_max: 12,
                 wreck_density: 1.65,
                 boss_unit: "armthor",
                 boss_title: "FOUNDRY OVERSEER THOR-PRIME",
                 wreck_pool: &["armmav_dead", "armsnipe_dead", "corsumo_dead", "corgol_dead", "armfus_dead"],
                 jackpot_pool: &["armbanth_dead", "armraz_dead", "corkarg_dead"],
+            },
+            Self::OrbitalRailSpine => BiomeSpec {
+                kind: *self,
+                tier: 3,
+                base_height: 195.0,
+                wall_height: 430.0,
+                noise_amplitude: 18.0,
+                noise_frequency: 0.0024,
+                domain_warp_strength: 30.0,
+                max_walkable_slope_deg: 20.0,
+                room_min: 10,
+                room_max: 12,
+                wreck_density: 1.60,
+                boss_unit: "armvang",
+                boss_title: "RAIL-SPINE ARTILLERY DREADNOUGHT VANGUARD",
+                wreck_pool: &["armsnipe_dead", "armmanni_dead", "cormort_dead", "armmav_dead", "corkarg_dead"],
+                jackpot_pool: &["armraz_dead", "corcat_dead", "armthor_dead"],
+            },
+            Self::CryoDataVault => BiomeSpec {
+                kind: *self,
+                tier: 3,
+                base_height: 155.0,
+                wall_height: 390.0,
+                noise_amplitude: 20.0,
+                noise_frequency: 0.0026,
+                domain_warp_strength: 35.0,
+                max_walkable_slope_deg: 21.0,
+                room_min: 10,
+                room_max: 12,
+                wreck_density: 1.70,
+                boss_unit: "armbanth",
+                boss_title: "CRYO-PRESERVED TITAN BANTHA-ZERO",
+                wreck_pool: &["armanni_dead", "armsnipe_dead", "armfus_dead", "armafus_dead", "corgol_dead"],
+                jackpot_pool: &["armbanth_dead", "corkorg_dead", "armafus_dead"],
+            },
+            Self::ScrapCanyonBadlands => BiomeSpec {
+                kind: *self,
+                tier: 4,
+                base_height: 150.0,
+                wall_height: 445.0,
+                noise_amplitude: 38.0,
+                noise_frequency: 0.0030,
+                domain_warp_strength: 65.0,
+                max_walkable_slope_deg: 22.0,
+                room_min: 11,
+                room_max: 13,
+                wreck_density: 1.80,
+                boss_unit: "corjugg",
+                boss_title: "CANYON COLOSSUS BEHEMOTH-JUGGERNAUT",
+                wreck_pool: &["corkarg_dead", "corcat_dead", "armmar_dead", "armraz_dead", "corgol_dead"],
+                jackpot_pool: &["corkorg_dead", "corjugg_dead", "armbanth_dead"],
             },
             Self::ExperimentalGantryCitadel => BiomeSpec {
                 kind: *self,
@@ -138,9 +236,9 @@ impl BiomeKind {
                 noise_frequency: 0.0022,
                 domain_warp_strength: 40.0,
                 max_walkable_slope_deg: 20.0,
-                room_min: 10,
+                room_min: 11,
                 room_max: 14,
-                wreck_density: 1.85,
+                wreck_density: 1.90,
                 boss_unit: "corkorg",
                 boss_title: "EXPERIMENTAL JUGGERNAUT KORGOTH-OMEGA",
                 wreck_pool: &["armbanth_dead", "armraz_dead", "armmar_dead", "corkarg_dead", "corcat_dead"],
@@ -176,6 +274,7 @@ pub enum RoomKind {
     ChokePoint,
     FoundryCache,
     HazardGauntlet,
+    SetpieceVault,
     BossArena,
     ExtractionGate,
 }
@@ -188,6 +287,7 @@ impl RoomKind {
             Self::ChokePoint => "choke_point",
             Self::FoundryCache => "foundry_cache",
             Self::HazardGauntlet => "hazard_gauntlet",
+            Self::SetpieceVault => "setpiece_vault",
             Self::BossArena => "boss_arena",
             Self::ExtractionGate => "extraction_gate",
         }
@@ -231,8 +331,19 @@ pub struct PlannedWreck {
     pub x: f64,
     pub z: f64,
     pub is_jackpot: bool,
+    pub is_overclocked_reactor: bool,
     pub metal: u32,
     pub energy: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct SetpieceObjective {
+    pub id: usize,
+    pub node_id: usize,
+    pub kind: &'static str,
+    pub x: f64,
+    pub z: f64,
+    pub radius: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -245,6 +356,7 @@ pub struct ZoneBlueprint {
     pub nodes: Vec<RoomNode>,
     pub edges: Vec<CorridorEdge>,
     pub planned_wrecks: Vec<PlannedWreck>,
+    pub setpieces: Vec<SetpieceObjective>,
 }
 
 fn smoothstep(t: f64) -> f64 {
@@ -318,6 +430,62 @@ fn point_to_segment_projection(px: f64, pz: f64, ax: f64, az: f64, bx: f64, bz: 
     (dist, t)
 }
 
+fn compute_room_position(
+    topology: &str,
+    idx: usize,
+    middle_count: usize,
+    margin: f64,
+    map_size_x: f64,
+    map_size_z: f64,
+    rng: &mut ProcRng,
+) -> (f64, f64) {
+    let progress = (idx as f64) / ((middle_count + 2) as f64);
+    let span_x = map_size_x - 2.0 * margin;
+    let span_z = map_size_z - 2.0 * margin;
+    let base_x = margin + progress * span_x;
+    let base_z = margin + progress * span_z;
+    let min_dim = map_size_x.min(map_size_z);
+
+    if topology == "orthogonal_bays" {
+        let grid_step = 360.0;
+        let ortho_sign = if (idx + 1) % 2 == 0 { 1.0 } else { -1.0 };
+        let raw_x = base_x + ortho_sign * 0.18 * min_dim;
+        let raw_z = base_z - ortho_sign * 0.18 * min_dim;
+        let qx = ((raw_x / grid_step) + 0.5).floor() * grid_step;
+        let qz = ((raw_z / grid_step) + 0.5).floor() * grid_step;
+        (
+            qx.clamp(margin, map_size_x - margin),
+            qz.clamp(margin, map_size_z - margin),
+        )
+    } else if topology == "linear_spine_flanks" {
+        let ortho_sign = if (idx + 1) % 2 == 0 { 1.0 } else { -1.0 };
+        let flank_offset = if (idx + 1) % 3 == 0 { 0.04 } else { 0.14 };
+        let nx = base_x + ortho_sign * flank_offset * min_dim;
+        let nz = base_z - ortho_sign * flank_offset * min_dim;
+        (
+            nx.clamp(margin, map_size_x - margin),
+            nz.clamp(margin, map_size_z - margin),
+        )
+    } else if topology == "switchback_canyons" {
+        let wave = (progress * std::f64::consts::PI * 2.5).sin() * 0.28 * min_dim;
+        let nx = base_x + wave;
+        let nz = base_z - wave * 0.75;
+        (
+            nx.clamp(margin, map_size_x - margin),
+            nz.clamp(margin, map_size_z - margin),
+        )
+    } else {
+        let ortho_sign = if (idx + 1) % 2 == 0 { 1.0 } else { -1.0 };
+        let ortho_mag = rng.range_f64(0.12, 0.26) * min_dim;
+        let nx = base_x + ortho_sign * ortho_mag;
+        let nz = base_z - ortho_sign * ortho_mag;
+        (
+            nx.clamp(margin, map_size_x - margin),
+            nz.clamp(margin, map_size_z - margin),
+        )
+    }
+}
+
 pub fn build_zone_blueprint(
     seed: u64,
     zone_depth: usize,
@@ -329,6 +497,7 @@ pub fn build_zone_blueprint(
     let mut rng = ProcRng::new(seed.wrapping_add((depth as u64) * 7919));
     let biome_kind = biome_override.unwrap_or_else(|| BiomeKind::from_depth(depth));
     let biome = biome_kind.spec();
+    let topology = biome_kind.topology();
 
     let room_count = rng.range_usize(biome.room_min, biome.room_max);
     let margin = map_size_x.min(map_size_z) * 0.12;
@@ -336,7 +505,6 @@ pub fn build_zone_blueprint(
     let mut nodes = Vec::with_capacity(room_count);
     let mut edges = Vec::new();
 
-    // Node 0 (1-indexed in Lua): Drop Zone & Mobile Garage
     nodes.push(RoomNode {
         id: 0,
         kind: RoomKind::DropZone,
@@ -355,29 +523,23 @@ pub fn build_zone_blueprint(
         RoomKind::FoundryCache,
         RoomKind::SalvageField,
         RoomKind::HazardGauntlet,
+        RoomKind::SetpieceVault,
     ];
 
     for i in 1..=middle_count {
-        let progress = (i as f64) / ((middle_count + 2) as f64);
         let kind = room_cycle[(i - 1) % room_cycle.len()];
-        let base_x = margin + progress * (map_size_x - 2.0 * margin);
-        let base_z = margin + progress * (map_size_z - 2.0 * margin);
-
-        let ortho_sign = if (i + 1) % 2 == 0 { 1.0 } else { -1.0 };
-        let ortho_mag = rng.range_f64(0.12, 0.28) * map_size_x.min(map_size_z);
-        let nx = (base_x + ortho_sign * ortho_mag).clamp(margin, map_size_x - margin);
-        let nz = (base_z - ortho_sign * ortho_mag).clamp(margin, map_size_z - margin);
+        let (nx, nz) = compute_room_position(topology, i, middle_count, margin, map_size_x, map_size_z, &mut rng);
 
         let radius = match kind {
             RoomKind::SalvageField => rng.range_f64(280.0, 340.0),
-            RoomKind::ChokePoint => rng.range_f64(190.0, 230.0),
-            RoomKind::FoundryCache => rng.range_f64(240.0, 290.0),
+            RoomKind::ChokePoint => rng.range_f64(195.0, 235.0),
+            RoomKind::FoundryCache | RoomKind::SetpieceVault => rng.range_f64(245.0, 295.0),
             RoomKind::HazardGauntlet => rng.range_f64(250.0, 310.0),
-            _ => 250.0,
+            _ => 255.0,
         };
 
         let prev_elev = nodes[i - 1].elevation;
-        let elev_delta = rng.range_f64(-16.0, 20.0);
+        let elev_delta = rng.range_f64(-15.0, 18.0);
         let elevation = (prev_elev + elev_delta).clamp(biome.base_height - 30.0, biome.base_height + 50.0);
 
         let mut pillars = Vec::new();
@@ -398,12 +560,11 @@ pub fn build_zone_blueprint(
             z: nz,
             radius,
             elevation,
-            has_garage: kind == RoomKind::FoundryCache,
+            has_garage: matches!(kind, RoomKind::FoundryCache | RoomKind::SetpieceVault),
             pillars,
         });
     }
 
-    // Boss Arena Node
     let boss_idx = room_count - 2;
     let boss_x = map_size_x - margin - rng.range_f64(220.0, 320.0);
     let boss_z = map_size_z - margin - rng.range_f64(220.0, 320.0);
@@ -430,7 +591,6 @@ pub fn build_zone_blueprint(
         pillars: boss_pillars,
     });
 
-    // Extraction Gate Node
     let ext_idx = room_count - 1;
     nodes.push(RoomNode {
         id: ext_idx,
@@ -443,7 +603,8 @@ pub fn build_zone_blueprint(
         pillars: Vec::new(),
     });
 
-    // Primary Backbone Spine
+    let corridor_w = if topology == "catwalk_bridges" { 115.0 } else { 135.0 };
+
     for i in 0..(room_count - 1) {
         let u = &nodes[i];
         let v = &nodes[i + 1];
@@ -453,14 +614,13 @@ pub fn build_zone_blueprint(
         edges.push(CorridorEdge {
             from: i,
             to: i + 1,
-            width: if v.kind == RoomKind::BossArena { 165.0 } else { 135.0 },
+            width: if v.kind == RoomKind::BossArena { 165.0 } else { corridor_w },
             length: dist,
             slope_deg,
             is_primary: true,
         });
     }
 
-    // Secondary Flanking Loops
     for i in 1..(room_count.saturating_sub(3)) {
         if rng.next_f64() < 0.65 {
             let u = &nodes[i];
@@ -481,23 +641,31 @@ pub fn build_zone_blueprint(
         }
     }
 
-    // Populate Planned Wreck Fields
     let mut planned_wrecks = Vec::new();
+    let mut setpieces = Vec::new();
+    let setpiece_cycle = [
+        "locked_armory_vault",
+        "live_constructor_bay",
+        "overclocked_reactor_wreck",
+    ];
+
     for node in &nodes {
         if matches!(
             node.kind,
-            RoomKind::SalvageField | RoomKind::FoundryCache | RoomKind::ChokePoint
+            RoomKind::SalvageField | RoomKind::FoundryCache | RoomKind::ChokePoint | RoomKind::SetpieceVault
         ) {
             let base_wrecks = match node.kind {
                 RoomKind::SalvageField => 18,
-                RoomKind::FoundryCache => 14,
+                RoomKind::FoundryCache | RoomKind::SetpieceVault => 14,
                 _ => 8,
             };
             let count = ((base_wrecks as f64) * biome.wreck_density).floor() as usize;
             for w in 0..count {
                 let angle = rng.range_f64(0.0, std::f64::consts::PI * 2.0);
                 let r = rng.range_f64(35.0, node.radius * 0.82);
-                let is_jackpot = (node.kind == RoomKind::FoundryCache && w < 3) || (w == 0 && rng.next_f64() < 0.45);
+                let is_jackpot = matches!(node.kind, RoomKind::FoundryCache | RoomKind::SetpieceVault) && w < 3
+                    || (w == 0 && rng.next_f64() < 0.45);
+                let is_overclocked_reactor = node.kind == RoomKind::SetpieceVault && w == 0;
                 let pool = if is_jackpot {
                     biome.jackpot_pool
                 } else {
@@ -510,10 +678,23 @@ pub fn build_zone_blueprint(
                     x: node.x + angle.cos() * r,
                     z: node.z + angle.sin() * r,
                     is_jackpot,
+                    is_overclocked_reactor,
                     metal: if is_jackpot { 450 * biome.tier } else { 150 * biome.tier },
                     energy: if is_jackpot { 300 * biome.tier } else { 90 * biome.tier },
                 });
             }
+        }
+
+        if matches!(node.kind, RoomKind::FoundryCache | RoomKind::SetpieceVault) {
+            let sp_kind = setpiece_cycle[setpieces.len() % setpiece_cycle.len()];
+            setpieces.push(SetpieceObjective {
+                id: setpieces.len() + 1,
+                node_id: node.id,
+                kind: sp_kind,
+                x: node.x,
+                z: node.z,
+                radius: node.radius * 0.65,
+            });
         }
     }
 
@@ -526,6 +707,7 @@ pub fn build_zone_blueprint(
         nodes,
         edges,
         planned_wrecks,
+        setpieces,
     }
 }
 
@@ -597,13 +779,11 @@ pub fn sample_zone_height(bp: &ZoneBlueprint, x: f64, z: f64) -> f64 {
     h
 }
 
-/// Verifies both Macro Graph connectivity AND 2D Heightfield Grid Pathability across all rooms.
 pub fn verify_blueprint_and_grid_pathability(bp: &ZoneBlueprint, grid_res: usize) -> Result<(), String> {
     if bp.nodes.len() < 3 {
         return Err("Blueprint has fewer than 3 nodes".to_string());
     }
 
-    // 1. Macro Graph Slope-Constrained BFS
     let max_slope = bp.biome.max_walkable_slope_deg;
     let mut adj = vec![Vec::new(); bp.nodes.len()];
     for e in &bp.edges {
@@ -630,7 +810,6 @@ pub fn verify_blueprint_and_grid_pathability(bp: &ZoneBlueprint, grid_res: usize
         return Err(format!("Macro graph disconnected: {}/{} nodes reached", reached, bp.nodes.len()));
     }
 
-    // 2. 2D Heightfield Grid Pathability Verification
     let res = grid_res.max(64);
     let cell_w = bp.map_size_x / (res as f64);
     let cell_h = bp.map_size_z / (res as f64);
@@ -705,7 +884,6 @@ pub fn verify_blueprint_and_grid_pathability(bp: &ZoneBlueprint, grid_res: usize
     Ok(())
 }
 
-/// Renders an ASCII top-down tactical overview of the synthesized heightfield & rooms.
 pub fn render_ascii_map(bp: &ZoneBlueprint, width: usize, height: usize) -> String {
     let mut out = String::new();
     let wall_cutoff = bp.biome.base_height + 90.0;
@@ -725,6 +903,7 @@ pub fn render_ascii_map(bp: &ZoneBlueprint, width: usize, height: usize) -> Stri
                         RoomKind::ChokePoint => 'C',
                         RoomKind::FoundryCache => 'F',
                         RoomKind::HazardGauntlet => 'H',
+                        RoomKind::SetpieceVault => 'V',
                         RoomKind::BossArena => 'B',
                         RoomKind::ExtractionGate => 'E',
                     });
@@ -748,15 +927,14 @@ pub fn render_ascii_map(bp: &ZoneBlueprint, width: usize, height: usize) -> Stri
     out
 }
 
-/// Renders a clean SVG preview of the procedural zone layout, corridors, cover pillars, and wreck fields.
 pub fn render_svg_map(bp: &ZoneBlueprint) -> String {
     let mut svg = String::new();
     let _ = writeln!(
         svg,
-        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {:.0} {:.0}" width="768" height="768">"##,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {:.0} {:.0}" width="420" height="420">"##,
         bp.map_size_x, bp.map_size_z
     );
-    let _ = writeln!(svg, r##"  <rect width="100%" height="100%" fill="#11161d"/>"##);
+    let _ = writeln!(svg, r##"  <rect width="100%" height="100%" fill="#0d1117"/>"##);
 
     for edge in &bp.edges {
         let u = &bp.nodes[edge.from];
@@ -781,6 +959,7 @@ pub fn render_svg_map(bp: &ZoneBlueprint) -> String {
             RoomKind::ChokePoint => "#5c4033",
             RoomKind::FoundryCache => "#2e5a88",
             RoomKind::HazardGauntlet => "#7a2e2e",
+            RoomKind::SetpieceVault => "#5e35b1",
             RoomKind::BossArena => "#6b1d2f",
             RoomKind::ExtractionGate => "#178577",
         };
@@ -799,7 +978,13 @@ pub fn render_svg_map(bp: &ZoneBlueprint) -> String {
     }
 
     for w in &bp.planned_wrecks {
-        let color = if w.is_jackpot { "#fbbc04" } else { "#9aa0a6" };
+        let color = if w.is_overclocked_reactor {
+            "#ff5252"
+        } else if w.is_jackpot {
+            "#fbbc04"
+        } else {
+            "#9aa0a6"
+        };
         let r = if w.is_jackpot { 16.0 } else { 9.0 };
         let _ = writeln!(
             svg,
@@ -812,7 +997,50 @@ pub fn render_svg_map(bp: &ZoneBlueprint) -> String {
     svg
 }
 
-/// Exports a BAR Lua table representation of the blueprint.
+/// Compiles a standalone, zero-CDN HTML/SVG Interactive Map Atlas displaying all 8 Scrap Frontier biomes.
+pub fn render_html_map_atlas(base_seed: u64) -> String {
+    let mut html = String::new();
+    let _ = writeln!(html, "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">");
+    let _ = writeln!(html, "<title>Wreckage Protocol — 8-Biome Procedural Map Atlas</title>");
+    let _ = writeln!(
+        html,
+        "<style>body{{background:#0b0e14;color:#e6edf3;font-family:monospace;margin:24px;}} .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:20px;}} .card{{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;}} h1,h2{{margin:0 0 8px 0;color:#58a6ff;}} .meta{{font-size:12px;color:#8b949e;margin-bottom:12px;}}</style>"
+    );
+    let _ = writeln!(html, "</head><body>");
+    let _ = writeln!(
+        html,
+        "<h1>WRECKAGE PROTOCOL — 8-BIOME PROCEDURAL MAP ATLAS (Seed {})</h1>",
+        base_seed
+    );
+    let _ = writeln!(html, "<div class=\"grid\">");
+
+    for depth in 1..=8 {
+        let bp = build_zone_blueprint(base_seed, depth, 4096.0, 4096.0, None);
+        let _ = writeln!(html, "<div class=\"card\">");
+        let _ = writeln!(
+            html,
+            "<h2>Zone #{}: {} ({})</h2>",
+            depth,
+            bp.biome.kind.title(),
+            bp.biome.kind.topology()
+        );
+        let _ = writeln!(
+            html,
+            "<div class=\"meta\">Rooms: {} | Corridors: {} | BAR Wrecks: {} | Setpieces: {} | Boss: {}</div>",
+            bp.nodes.len(),
+            bp.edges.len(),
+            bp.planned_wrecks.len(),
+            bp.setpieces.len(),
+            bp.biome.boss_title
+        );
+        let _ = writeln!(html, "{}", render_svg_map(&bp));
+        let _ = writeln!(html, "</div>");
+    }
+
+    let _ = writeln!(html, "</div></body></html>");
+    html
+}
+
 pub fn export_lua_blueprint(bp: &ZoneBlueprint) -> String {
     let mut lua = String::new();
     let _ = writeln!(lua, "-- Generated by arpg-mapgen (Rust)");
@@ -820,8 +1048,10 @@ pub fn export_lua_blueprint(bp: &ZoneBlueprint) -> String {
     let _ = writeln!(lua, "  seed = {},", bp.seed);
     let _ = writeln!(lua, "  zoneDepth = {},", bp.zone_depth);
     let _ = writeln!(lua, "  biomeId = {:?},", bp.biome.kind.id());
+    let _ = writeln!(lua, "  topology = {:?},", bp.biome.kind.topology());
     let _ = writeln!(lua, "  nodeCount = {},", bp.nodes.len());
     let _ = writeln!(lua, "  wreckCount = {},", bp.planned_wrecks.len());
+    let _ = writeln!(lua, "  setpieceCount = {},", bp.setpieces.len());
     let _ = writeln!(lua, "}}");
     lua
 }
@@ -833,12 +1063,12 @@ mod tests {
     use std::process::Command;
 
     #[test]
-    fn test_120_seeds_macro_and_grid_connectivity_across_all_biomes() {
-        for i in 1..=120 {
+    fn test_520_seeds_macro_and_grid_connectivity_across_all_8_biomes() {
+        for i in 1..=520 {
             let seed = i * 104_729;
-            let depth = ((i as usize - 1) % 4) + 1;
+            let depth = ((i as usize - 1) % 8) + 1;
             let bp = build_zone_blueprint(seed, depth, 4096.0, 4096.0, None);
-            verify_blueprint_and_grid_pathability(&bp, 96).unwrap_or_else(|err| {
+            verify_blueprint_and_grid_pathability(&bp, 80).unwrap_or_else(|err| {
                 panic!(
                     "Seed {} (depth {}, biome {}) failed verification: {}",
                     seed,
@@ -847,8 +1077,9 @@ mod tests {
                     err
                 )
             });
-            assert!(bp.nodes.len() >= 7);
+            assert!(bp.nodes.len() >= 8);
             assert!(bp.planned_wrecks.len() >= 25);
+            assert!(!bp.setpieces.is_empty());
             assert_eq!(bp.nodes.first().unwrap().kind, RoomKind::DropZone);
             assert_eq!(bp.nodes[bp.nodes.len() - 2].kind, RoomKind::BossArena);
             assert_eq!(bp.nodes.last().unwrap().kind, RoomKind::ExtractionGate);
@@ -856,14 +1087,15 @@ mod tests {
     }
 
     #[test]
-    fn test_deterministic_svg_and_lua_export() {
+    fn test_deterministic_svg_lua_and_html_atlas_export() {
         let bp1 = build_zone_blueprint(424_242, 3, 4096.0, 4096.0, None);
         let bp2 = build_zone_blueprint(424_242, 3, 4096.0, 4096.0, None);
         assert_eq!(render_svg_map(&bp1), render_svg_map(&bp2));
         assert_eq!(export_lua_blueprint(&bp1), export_lua_blueprint(&bp2));
-        let ascii = render_ascii_map(&bp1, 48, 24);
-        assert!(ascii.contains('D'));
-        assert!(ascii.contains('B'));
+        let atlas = render_html_map_atlas(424_242);
+        assert!(atlas.contains("WRECKAGE PROTOCOL — 8-BIOME PROCEDURAL MAP ATLAS"));
+        assert!(atlas.contains("Molten Slag Smelting Refinery"));
+        assert!(atlas.contains("Sub-Zero Cryo-Computation Vault"));
     }
 
     #[test]

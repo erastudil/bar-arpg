@@ -65,6 +65,7 @@ local function syncAssemblyRulesParams(unitID, state)
 	Spring.SetUnitRulesParam(unitID, "arpg_build_power", b.buildPower)
 	Spring.SetUnitRulesParam(unitID, "arpg_reclaim_speed", b.reclaimSpeed)
 	Spring.SetUnitRulesParam(unitID, "arpg_tech_tier", state.unlockedTechTier or 1)
+	Spring.SetUnitRulesParam(unitID, "arpg_active_set_count", b.activeSets and #b.activeSets or 0)
 
 	-- Sync mounted part IDs
 	for slotName, partId in pairs(state.loadout) do
@@ -379,6 +380,25 @@ local function applyUniqueWeaponEffect(mechanic, attackerID, targetID, frame)
 						end
 					end
 				end
+			end
+		end
+	elseif mechanic == "entropy_reclaimer" then
+		-- Lazarus Live-Hull Entropy Reclaimer: strips structural alloy directly off living enemy hulls
+		addMaterials(attackerID, { reclaimed_alloy = 3 })
+	elseif mechanic == "phase_rail" then
+		-- Heisenberg Tunneling Phase-Rail: bypasses shields/walls for direct internal structural damage
+		if Spring and Spring.AddUnitDamage then
+			Spring.AddUnitDamage(targetID, 240, 0, attackerID, -1)
+		end
+	elseif mechanic == "thermal_inversion" then
+		-- Carnot Thermal-Inversion Lance: consumes attacker heat to multiply damage up to 3.5x
+		local attState = heroAssemblies[attackerID]
+		if attState then
+			local heatRatio = math.max(0.0, math.min(1.5, (attState.heat or 0) / math.max(1, attState.maxHeat or 100)))
+			local bonusDamage = math.floor(320 * heatRatio)
+			attState.heat = math.max(0.0, (attState.heat or 0) - 12.0)
+			if bonusDamage > 0 and Spring and Spring.AddUnitDamage then
+				Spring.AddUnitDamage(targetID, bonusDamage, 0, attackerID, -1)
 			end
 		end
 	end
