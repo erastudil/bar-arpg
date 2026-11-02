@@ -62,6 +62,12 @@ local function triggerNearestSalvage()
 	end
 end
 
+local function triggerNearestRaise()
+	if Spring and Spring.SendLuaRulesMsg then
+		Spring.SendLuaRulesMsg("arpg:raise_nearest")
+	end
+end
+
 function widget:Initialize()
 	cameraLockEnabled = true
 	garageDrawerOpen = false
@@ -118,9 +124,14 @@ function widget:KeyPress(key, mods, isRepeat)
 		cameraLockEnabled = not cameraLockEnabled
 		return true
 	end
-	-- [C] (99) channels Salvage Reclaim on nearest wreck
+	-- [C] (99) channels Salvage Reclaim on nearest wreck (Fork A: Strip)
 	if key == 99 then
 		triggerNearestSalvage()
+		return true
+	end
+	-- [V] (118) channels Necro-Lathe Resurrection on nearest wreck (Fork B: Raise)
+	if key == 118 then
+		triggerNearestRaise()
 		return true
 	end
 	-- [1]..[4] (49..52) fire Bolted-On Module Abilities 1..4
@@ -221,6 +232,8 @@ function widget:DrawScreen()
 	local heatCap = (heroID and Spring.GetUnitRulesParam and Spring.GetUnitRulesParam(heroID, "arpg_heat_cap")) or 135
 	local powerOut = (heroID and Spring.GetUnitRulesParam and Spring.GetUnitRulesParam(heroID, "arpg_power_out")) or 185
 	local powerDraw = (heroID and Spring.GetUnitRulesParam and Spring.GetUnitRulesParam(heroID, "arpg_power_draw")) or 110
+	local raisedCount = (heroID and Spring.GetUnitRulesParam and Spring.GetUnitRulesParam(heroID, "arpg_raised_unit_count")) or 0
+	local raisedDraw = (heroID and Spring.GetUnitRulesParam and Spring.GetUnitRulesParam(heroID, "arpg_raised_power_draw")) or 0
 	local powerState = (heroID and Spring.GetUnitRulesParam and Spring.GetUnitRulesParam(heroID, "arpg_power_state")) or "SURPLUS"
 	local salvageActive = (heroID and Spring.GetUnitRulesParam and Spring.GetUnitRulesParam(heroID, "arpg_salvage_active")) or 0
 	local salvagePct = (heroID and Spring.GetUnitRulesParam and Spring.GetUnitRulesParam(heroID, "arpg_salvage_progress")) or 0
@@ -250,10 +263,10 @@ function widget:DrawScreen()
 		gl.Text(string.format("HULL: %d / %d", math.floor(curHealth), math.floor(maxHealth)), px + 22, py + 98, 12, "o")
 		gl.Text(string.format("HEAT: %d / %d (%s)", math.floor(heat), math.floor(heatCap), massState), px + 262, py + 98, 12, "o")
 		gl.Text(
-			string.format("MASS: %d/%d | POWER: %+d MW (%s)", mass, massLimit, powerOut - powerDraw, powerState),
-			px + 492,
+			string.format("MASS: %d/%d | POWER: %+d MW (%s) | REZ: %d (-%d MW)", mass, massLimit, powerOut - powerDraw, powerState, raisedCount, raisedDraw),
+			px + 455,
 			py + 98,
-			11,
+			10.5,
 			"o"
 		)
 	end
@@ -285,16 +298,16 @@ function widget:DrawScreen()
 		}
 	end
 
-	-- Salvage Channel Button [C]
+	-- Salvage Channel Button [C] (Strip Wreck) & [V] (Raise Wreck)
 	local sbx1 = px + 580
-	local sby1 = py + 14
+	local sby1 = py + 43
 	local sbx2 = sbx1 + 82
-	local sby2 = sby1 + 66
+	local sby2 = sby1 + 37
 	gl.Color(0.75, 0.55, 0.12, 0.95)
 	gl.Rect(sbx1, sby1, sbx2, sby2)
 	if gl.Text then
 		gl.Color(1, 1, 1, 1)
-		gl.Text("[C] SALVAGE", sbx1 + 6, sby1 + 36, 11, "o")
+		gl.Text("[C] STRIP", sbx1 + 8, sby1 + 14, 10, "o")
 	end
 	uiButtons[#uiButtons + 1] = {
 		x1 = sbx1,
@@ -302,6 +315,24 @@ function widget:DrawScreen()
 		x2 = sbx2,
 		y2 = sby2,
 		onClick = triggerNearestSalvage,
+	}
+
+	local rbx1 = px + 580
+	local rby1 = py + 14
+	local rbx2 = rbx1 + 82
+	local rby2 = rby1 + 25
+	gl.Color(0.18, 0.68, 0.45, 0.95)
+	gl.Rect(rbx1, rby1, rbx2, rby2)
+	if gl.Text then
+		gl.Color(1, 1, 1, 1)
+		gl.Text("[V] RAISE", rbx1 + 8, rby1 + 8, 10, "o")
+	end
+	uiButtons[#uiButtons + 1] = {
+		x1 = rbx1,
+		y1 = rby1,
+		x2 = rbx2,
+		y2 = rby2,
+		onClick = triggerNearestRaise,
 	}
 
 	-- Garage Drawer Toggle Button [TAB]
