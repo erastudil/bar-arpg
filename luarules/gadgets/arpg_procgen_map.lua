@@ -25,6 +25,36 @@ local SetpieceTypes = BiomeConfig.SetpieceTypes
 local ZoneModifiers = BiomeConfig.ZoneModifiers or {}
 local ZoneModifierSequence = BiomeConfig.ZoneModifierSequence or { "lazarus_nanite_reanimation" }
 
+local function loadPrecompiledAtlas()
+	if VFS and VFS.Include then
+		local ok, data = pcall(VFS.Include, "luarules/configs/arpg_map_atlas_blueprints.lua")
+		if ok and type(data) == "table" then
+			return data
+		end
+	end
+	if dofile then
+		local ok, data = pcall(dofile, "luarules/configs/arpg_map_atlas_blueprints.lua")
+		if ok and type(data) == "table" then
+			return data
+		end
+	end
+	return nil
+end
+
+local PrecompiledAtlas = loadPrecompiledAtlas()
+
+local function GetPrecompiledAtlas()
+	return PrecompiledAtlas
+end
+
+local function GetPrecompiledZoneBlueprint(zoneDepth)
+	if not PrecompiledAtlas or type(PrecompiledAtlas.zones) ~= "table" then
+		return nil
+	end
+	local idx = ((math.max(1, tonumber(zoneDepth) or 1) - 1) % 8) + 1
+	return PrecompiledAtlas.zones[idx]
+end
+
 if gadgetHandler and not gadgetHandler:IsSyncedCode() then
 	return false
 end
@@ -878,6 +908,8 @@ if gadgetHandler and gadgetHandler:IsSyncedCode() then
 	GG.ARPG_Map.BuildZoneBlueprint = BuildZoneBlueprint
 	GG.ARPG_Map.SampleZoneHeight = SampleZoneHeight
 	GG.ARPG_Map.VerifyConnectivity = VerifyConnectivity
+	GG.ARPG_Map.GetPrecompiledAtlas = GetPrecompiledAtlas
+	GG.ARPG_Map.GetPrecompiledZoneBlueprint = GetPrecompiledZoneBlueprint
 
 	function gadget:GamePreload()
 		local modOpts = Spring.GetModOptions and Spring.GetModOptions() or {}
@@ -891,4 +923,6 @@ return {
 	BuildZoneBlueprint = BuildZoneBlueprint,
 	SampleZoneHeight = SampleZoneHeight,
 	VerifyConnectivity = VerifyConnectivity,
+	GetPrecompiledAtlas = GetPrecompiledAtlas,
+	GetPrecompiledZoneBlueprint = GetPrecompiledZoneBlueprint,
 }

@@ -635,4 +635,50 @@ GG.ARPG_Assembly.EquipPart(activeHeroID, "module_4", "mod_thermal_purge")
 assertTrue(activeHeroState.budget.raisedPowerDraw == 0 and #GG.ARPG_Assembly.GetRaisedUnits(activeHeroID) == 0, "Un-equipping rez attachment decommissioned raised minions and freed upkeep")
 print("[PASS] Test 9: Lazarus Rez Attachment (mod_lazarus_rez_attachment), Strip-or-Raise Wreck Fork, and Continuous Core Power Upkeep verified.")
 
+-- ============================================================================
+-- TEST 10: Item 9 — Native Map Atlas (PNG + SVG + Precompiled BAR Lua Blueprints, Zero HTML)
+-- ============================================================================
+local AssetManifest = dofile("luarules/configs/arpg_asset_manifest.lua")
+assertTrue(AssetManifest and AssetManifest.map_atlas ~= nil, "Asset manifest declares native map_atlas paths")
+assertTrue(AssetManifest.map_atlas.atlas_png == "bitmaps/arpg_icons/arpg_map_atlas.png", "Asset manifest points to native VFS PNG map atlas")
+assertTrue(AssetManifest.map_atlas.atlas_blueprints == "luarules/configs/arpg_map_atlas_blueprints.lua", "Asset manifest points to precompiled Lua blueprint table")
+
+local precompiledAtlas = GG.ARPG_Map.GetPrecompiledAtlas()
+assertTrue(type(precompiledAtlas) == "table" and precompiledAtlas.generator == "arpg-mapgen", "Loaded precompiled arpg_map_atlas_blueprints.lua via GG.ARPG_Map.GetPrecompiledAtlas")
+assertTrue(type(precompiledAtlas.zones) == "table" and #precompiledAtlas.zones == 8, "Precompiled Lua map atlas contains all 8 Scrap Frontier zones")
+
+for zIdx = 1, 8 do
+	local zBp = GG.ARPG_Map.GetPrecompiledZoneBlueprint(zIdx)
+	assertTrue(zBp ~= nil and zBp.zoneDepth == zIdx, "Precompiled zone blueprint " .. tostring(zIdx) .. " indexed cleanly")
+	assertTrue(type(zBp.nodes) == "table" and #zBp.nodes >= 8, "Precompiled zone " .. tostring(zIdx) .. " contains room nodes")
+	assertTrue(type(zBp.edges) == "table" and #zBp.edges >= 7, "Precompiled zone " .. tostring(zIdx) .. " contains corridor edges")
+	assertTrue(type(zBp.setpieces) == "table" and #zBp.setpieces >= 1, "Precompiled zone " .. tostring(zIdx) .. " contains setpiece vaults")
+	assertTrue(type(zBp.plannedWrecks) == "table" and #zBp.plannedWrecks >= 25, "Precompiled zone " .. tostring(zIdx) .. " contains BAR wreck clusters")
+	assertTrue(type(zBp.heightContourSummary) == "table" and zBp.heightContourSummary.maxElev > zBp.heightContourSummary.minElev, "Precompiled zone " .. tostring(zIdx) .. " exposes heightmap contour summary")
+end
+
+local function readBinaryFile(relPath)
+	local fh = io.open(relPath, "rb")
+	assertTrue(fh ~= nil, "Expected native atlas artifact on disk: " .. tostring(relPath))
+	local bytes = fh:read("*a")
+	fh:close()
+	return bytes
+end
+
+local vfsPngBytes = readBinaryFile(AssetManifest.map_atlas.atlas_png)
+assertTrue(#vfsPngBytes > 50000, "VFS PNG map atlas exceeds 50 KB byte floor (" .. tostring(#vfsPngBytes) .. " bytes)")
+assertTrue(vfsPngBytes:sub(1, 8) == "\137PNG\r\n\26\n", "VFS PNG map atlas carries valid RFC 2083 PNG signature")
+
+local outSvgBytes = readBinaryFile(AssetManifest.map_atlas.atlas_svg)
+assertTrue(#outSvgBytes > 100000, "Native SVG map atlas exceeds 100 KB byte floor (" .. tostring(#outSvgBytes) .. " bytes)")
+assertTrue(outSvgBytes:sub(1, 4) == "<svg", "Native SVG map atlas starts with standalone <svg> root")
+assertTrue(not outSvgBytes:find("<!DOCTYPE html", 1, true) and not outSvgBytes:find("<html", 1, true), "Zero HTML wrapper tags in SVG map atlas")
+
+local deletedHtml = io.open("out/arpg_map_atlas.html", "rb")
+if deletedHtml then
+	deletedHtml:close()
+end
+assertTrue(deletedHtml == nil, "Deleted out/arpg_map_atlas.html remains absent (zero HTML artifacts)")
+print("[PASS] Test 10: Native Map Atlas (.png + .svg + precompiled Recoil/BAR Lua blueprints, zero HTML) verified.")
+
 print("ALL BAR SCI-FI ARPG INTEGRATION TESTS PASSED (EXIT 0)")

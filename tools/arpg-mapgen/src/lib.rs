@@ -1,5 +1,5 @@
 //! Deterministic 8-Biome Procedural Map Generator, Heightfield Synthesizer, Grid Pathability
-//! Verifier, and Interactive HTML/SVG Map Atlas Compiler for Beyond All Reason — Wreckage Protocol.
+//! Verifier, and Native PNG/SVG/Lua Map Atlas Compiler for Beyond All Reason — Wreckage Protocol.
 
 use std::collections::VecDeque;
 use std::fmt::Write as _;
@@ -927,56 +927,104 @@ pub fn render_ascii_map(bp: &ZoneBlueprint, width: usize, height: usize) -> Stri
     out
 }
 
-pub fn render_svg_map(bp: &ZoneBlueprint) -> String {
-    let mut svg = String::new();
-    let _ = writeln!(
-        svg,
-        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {:.0} {:.0}" width="420" height="420">"##,
-        bp.map_size_x, bp.map_size_z
-    );
-    let _ = writeln!(svg, r##"  <rect width="100%" height="100%" fill="#0d1117"/>"##);
+fn append_zone_svg_elements(svg: &mut String, bp: &ZoneBlueprint) {
+    let wall_cutoff = bp.biome.base_height + 90.0;
+    let grid_n = 28usize;
+    let cell_w = bp.map_size_x / (grid_n as f64);
+    let cell_h = bp.map_size_z / (grid_n as f64);
 
+    // Heightmap hypsometric contour cells
+    for gz in 0..grid_n {
+        for gx in 0..grid_n {
+            let wx = (gx as f64 + 0.5) * cell_w;
+            let wz = (gz as f64 + 0.5) * cell_h;
+            let h = sample_zone_height(bp, wx, wz);
+            let fill = if h > wall_cutoff {
+                let band = ((h - wall_cutoff) / 45.0).floor() as i32;
+                if band % 2 == 0 {
+                    "#111722"
+                } else {
+                    "#161f2e"
+                }
+            } else {
+                let band = ((h - bp.biome.base_height + 40.0) / 16.0).floor() as i32;
+                if band % 2 == 0 {
+                    "#162436"
+                } else {
+                    "#1b2d42"
+                }
+            };
+            let _ = writeln!(
+                svg,
+                r##"    <rect x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" fill="{}"/>"##,
+                gx as f64 * cell_w,
+                gz as f64 * cell_h,
+                cell_w + 0.8,
+                cell_h + 0.8,
+                fill
+            );
+        }
+    }
+
+    // Corridor graph edges
     for edge in &bp.edges {
         let u = &bp.nodes[edge.from];
         let v = &bp.nodes[edge.to];
-        let stroke = if edge.is_primary { "#2d4a63" } else { "#1f3347" };
+        let stroke = if edge.is_primary { "#2d5a7b" } else { "#1f3d58" };
+        let center_stroke = if edge.is_primary { "#58a6ff" } else { "#388bfd" };
         let _ = writeln!(
             svg,
-            r##"  <line x1="{:.1}" y1="{:.1}" x2="{:.1}" y2="{:.1}" stroke="{}" stroke-width="{:.1}" stroke-linecap="round"/>"##,
+            r##"    <line x1="{:.1}" y1="{:.1}" x2="{:.1}" y2="{:.1}" stroke="{}" stroke-width="{:.1}" stroke-linecap="round"/>"##,
             u.x,
             u.z,
             v.x,
             v.z,
             stroke,
-            edge.width * 1.4
+            edge.width * 1.35
+        );
+        let _ = writeln!(
+            svg,
+            r##"    <line x1="{:.1}" y1="{:.1}" x2="{:.1}" y2="{:.1}" stroke="{}" stroke-width="10" stroke-dasharray="24,18" stroke-linecap="round" opacity="0.65"/>"##,
+            u.x, u.z, v.x, v.z, center_stroke
         );
     }
 
+    // Setpiece Vault objective rings
+    for sp in &bp.setpieces {
+        let _ = writeln!(
+            svg,
+            r##"    <circle cx="{:.1}" cy="{:.1}" r="{:.1}" fill="none" stroke="#d2a8ff" stroke-width="10" stroke-dasharray="28,16"/>"##,
+            sp.x, sp.z, sp.radius
+        );
+    }
+
+    // Zone room boundaries and cover pillars
     for node in &bp.nodes {
-        let fill = match node.kind {
-            RoomKind::DropZone => "#1f6f50",
-            RoomKind::SalvageField => "#4a5d23",
-            RoomKind::ChokePoint => "#5c4033",
-            RoomKind::FoundryCache => "#2e5a88",
-            RoomKind::HazardGauntlet => "#7a2e2e",
-            RoomKind::SetpieceVault => "#5e35b1",
-            RoomKind::BossArena => "#6b1d2f",
-            RoomKind::ExtractionGate => "#178577",
+        let (fill, stroke) = match node.kind {
+            RoomKind::DropZone => ("#1f6f50", "#3fb950"),
+            RoomKind::SalvageField => ("#4a5d23", "#a2d240"),
+            RoomKind::ChokePoint => ("#5c4033", "#f0883e"),
+            RoomKind::FoundryCache => ("#2e5a88", "#79c0ff"),
+            RoomKind::HazardGauntlet => ("#7a2e2e", "#ff7b72"),
+            RoomKind::SetpieceVault => ("#5e35b1", "#d2a8ff"),
+            RoomKind::BossArena => ("#6b1d2f", "#ffa198"),
+            RoomKind::ExtractionGate => ("#178577", "#56d4dd"),
         };
         let _ = writeln!(
             svg,
-            r##"  <circle cx="{:.1}" cy="{:.1}" r="{:.1}" fill="{}" stroke="#8ab4f8" stroke-width="6"/>"##,
-            node.x, node.z, node.radius, fill
+            r##"    <circle cx="{:.1}" cy="{:.1}" r="{:.1}" fill="{}" fill-opacity="0.88" stroke="{}" stroke-width="12"/>"##,
+            node.x, node.z, node.radius, fill, stroke
         );
         for pil in &node.pillars {
             let _ = writeln!(
                 svg,
-                r##"  <circle cx="{:.1}" cy="{:.1}" r="{:.1}" fill="#0b0e14" stroke="#f28b82" stroke-width="4"/>"##,
+                r##"    <circle cx="{:.1}" cy="{:.1}" r="{:.1}" fill="#0b0e14" stroke="#f28b82" stroke-width="8"/>"##,
                 pil.x, pil.z, pil.radius
             );
         }
     }
 
+    // Pre-seeded BAR wreckage clusters
     for w in &bp.planned_wrecks {
         let color = if w.is_overclocked_reactor {
             "#ff5252"
@@ -985,73 +1033,800 @@ pub fn render_svg_map(bp: &ZoneBlueprint) -> String {
         } else {
             "#9aa0a6"
         };
-        let r = if w.is_jackpot { 16.0 } else { 9.0 };
+        let r = if w.is_jackpot { 18.0 } else { 10.0 };
         let _ = writeln!(
             svg,
-            r##"  <circle cx="{:.1}" cy="{:.1}" r="{:.1}" fill="{}"/>"##,
+            r##"    <circle cx="{:.1}" cy="{:.1}" r="{:.1}" fill="{}"/>"##,
             w.x, w.z, r, color
         );
     }
+}
 
+pub fn render_svg_map(bp: &ZoneBlueprint) -> String {
+    let mut svg = String::new();
+    let _ = writeln!(
+        svg,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {:.0} {:.0}" width="512" height="512">"##,
+        bp.map_size_x, bp.map_size_z
+    );
+    let _ = writeln!(svg, r##"  <rect width="100%" height="100%" fill="#0d1117"/>"##);
+    append_zone_svg_elements(&mut svg, bp);
     let _ = writeln!(svg, "</svg>");
     svg
 }
 
-/// Compiles a standalone, zero-CDN HTML/SVG Interactive Map Atlas displaying all 8 Scrap Frontier biomes.
-pub fn render_html_map_atlas(base_seed: u64) -> String {
-    let mut html = String::new();
-    let _ = writeln!(html, "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">");
-    let _ = writeln!(html, "<title>Wreckage Protocol — 8-Biome Procedural Map Atlas</title>");
+/// Compiles a standalone, pure-SVG 8-Biome Procedural Map Atlas (zero HTML, zero web wrappers).
+pub fn render_svg_map_atlas(base_seed: u64) -> String {
+    let width = 1860usize;
+    let height = 1020usize;
+    let mut svg = String::new();
     let _ = writeln!(
-        html,
-        "<style>body{{background:#0b0e14;color:#e6edf3;font-family:monospace;margin:24px;}} .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:20px;}} .card{{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;}} h1,h2{{margin:0 0 8px 0;color:#58a6ff;}} .meta{{font-size:12px;color:#8b949e;margin-bottom:12px;}}</style>"
+        svg,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {} {}" width="{}" height="{}">"##,
+        width, height, width, height
     );
-    let _ = writeln!(html, "</head><body>");
+    let _ = writeln!(svg, r##"  <rect width="100%" height="100%" fill="#0b0e14"/>"##);
     let _ = writeln!(
-        html,
-        "<h1>WRECKAGE PROTOCOL — 8-BIOME PROCEDURAL MAP ATLAS (Seed {})</h1>",
+        svg,
+        r##"  <text x="28" y="42" fill="#58a6ff" font-family="monospace" font-size="22" font-weight="bold">WRECKAGE PROTOCOL — 8-BIOME PROCEDURAL MAP ATLAS (SEED {})</text>"##,
         base_seed
     );
-    let _ = writeln!(html, "<div class=\"grid\">");
+    let _ = writeln!(
+        svg,
+        r##"  <text x="28" y="66" fill="#8b949e" font-family="monospace" font-size="13">NATIVE VECTOR ATLAS | DROP PAD (GREEN) | SALVAGE FIELD (OLIVE) | FOUNDRY/VAULT (BLUE/PURPLE) | BOSS ARENA (CRIMSON) | EXTRACTION GATE (TEAL)</text>"##
+    );
+
+    let card_w = 436.0;
+    let card_h = 446.0;
+    let map_box = 368.0;
 
     for depth in 1..=8 {
+        let col = (depth - 1) % 4;
+        let row = (depth - 1) / 4;
+        let cx = 24.0 + (col as f64) * (card_w + 18.0);
+        let cy = 84.0 + (row as f64) * (card_h + 18.0);
         let bp = build_zone_blueprint(base_seed, depth, 4096.0, 4096.0, None);
-        let _ = writeln!(html, "<div class=\"card\">");
+
         let _ = writeln!(
-            html,
-            "<h2>Zone #{}: {} ({})</h2>",
+            svg,
+            r##"  <rect x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" rx="8" fill="#161b22" stroke="#30363d" stroke-width="2"/>"##,
+            cx, cy, card_w, card_h
+        );
+        let _ = writeln!(
+            svg,
+            r##"  <text x="{:.1}" y="{:.1}" fill="#58a6ff" font-family="monospace" font-size="14" font-weight="bold">Z{}: {} ({})</text>"##,
+            cx + 14.0,
+            cy + 24.0,
             depth,
             bp.biome.kind.title(),
             bp.biome.kind.topology()
         );
         let _ = writeln!(
-            html,
-            "<div class=\"meta\">Rooms: {} | Corridors: {} | BAR Wrecks: {} | Setpieces: {} | Boss: {}</div>",
+            svg,
+            r##"  <text x="{:.1}" y="{:.1}" fill="#8b949e" font-family="monospace" font-size="11">Rooms:{} Edges:{} Wrecks:{} Vaults:{} | {}</text>"##,
+            cx + 14.0,
+            cy + 42.0,
             bp.nodes.len(),
             bp.edges.len(),
             bp.planned_wrecks.len(),
             bp.setpieces.len(),
             bp.biome.boss_title
         );
-        let _ = writeln!(html, "{}", render_svg_map(&bp));
-        let _ = writeln!(html, "</div>");
+
+        let map_x = cx + (card_w - map_box) * 0.5;
+        let map_y = cy + 54.0;
+        let scale = map_box / bp.map_size_x;
+        let _ = writeln!(
+            svg,
+            r##"  <g transform="translate({:.2},{:.2}) scale({:.6})">"##,
+            map_x, map_y, scale
+        );
+        let _ = writeln!(
+            svg,
+            r##"    <rect x="0" y="0" width="{:.0}" height="{:.0}" fill="#0d1117" stroke="#21262d" stroke-width="16"/>"##,
+            bp.map_size_x, bp.map_size_z
+        );
+        append_zone_svg_elements(&mut svg, &bp);
+        let _ = writeln!(svg, "  </g>");
     }
 
-    let _ = writeln!(html, "</div></body></html>");
-    html
+    let _ = writeln!(svg, "</svg>");
+    svg
+}
+
+// ============================================================================
+// Pure-Rust Native PNG Map Atlas Rasterizer & RFC 1950/1951 Encoder
+// ============================================================================
+
+fn glyph_5x7(ch: char) -> [u8; 7] {
+    match ch.to_ascii_uppercase() {
+        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+        'C' => [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110],
+        'D' => [0b11100, 0b10010, 0b10001, 0b10001, 0b10001, 0b10010, 0b11100],
+        'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+        'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
+        'G' => [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110],
+        'H' => [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'I' => [0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+        'J' => [0b00111, 0b00010, 0b00010, 0b00010, 0b10010, 0b10010, 0b01100],
+        'K' => [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+        'M' => [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
+        'N' => [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
+        'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        'P' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
+        'Q' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101],
+        'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+        'S' => [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
+        'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+        'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        'V' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+        'W' => [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010],
+        'X' => [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+        'Y' => [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
+        'Z' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
+        '0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
+        '1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+        '2' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
+        '3' => [0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110],
+        '4' => [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
+        '5' => [0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110],
+        '6' => [0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
+        '7' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
+        '8' => [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
+        '9' => [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110],
+        ':' => [0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b00000],
+        '-' => [0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000],
+        '|' => [0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+        '#' => [0b01010, 0b11111, 0b01010, 0b01010, 0b11111, 0b01010, 0b00000],
+        '(' => [0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010],
+        ')' => [0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000],
+        '/' => [0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000],
+        '_' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b11111],
+        '.' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00100, 0b00100],
+        _ => [0; 7],
+    }
+}
+
+fn put_px(buf: &mut [u8], w: usize, h: usize, x: isize, y: isize, rgb: [u8; 3]) {
+    if x >= 0 && (x as usize) < w && y >= 0 && (y as usize) < h {
+        let idx = ((y as usize) * w + (x as usize)) * 3;
+        buf[idx] = rgb[0];
+        buf[idx + 1] = rgb[1];
+        buf[idx + 2] = rgb[2];
+    }
+}
+
+fn draw_text_5x7(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    x0: usize,
+    y0: usize,
+    text: &str,
+    scale: usize,
+    rgb: [u8; 3],
+) {
+    let sc = scale.max(1);
+    for (ci, ch) in text.chars().enumerate() {
+        let rows = glyph_5x7(ch);
+        let cx = x0 + ci * 6 * sc;
+        for (ry, row_bits) in rows.iter().enumerate() {
+            for rx in 0..5 {
+                if (row_bits >> (4 - rx)) & 1 == 1 {
+                    for sy in 0..sc {
+                        for sx in 0..sc {
+                            put_px(
+                                buf,
+                                w,
+                                h,
+                                (cx + rx * sc + sx) as isize,
+                                (y0 + ry * sc + sy) as isize,
+                                rgb,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn rasterize_zone_panel(
+    buf: &mut [u8],
+    img_w: usize,
+    img_h: usize,
+    px0: usize,
+    py0: usize,
+    panel_size: usize,
+    bp: &ZoneBlueprint,
+) {
+    let wall_cutoff = bp.biome.base_height + 90.0;
+    let inv = 1.0 / (panel_size.max(1) as f64);
+
+    // 1. Hypsometric heightfield, walkable floor, wall cliffs, and elevation contour lines
+    for py in 0..panel_size {
+        let wz = (py as f64 + 0.5) * inv * bp.map_size_z;
+        for px in 0..panel_size {
+            let wx = (px as f64 + 0.5) * inv * bp.map_size_x;
+            let h = sample_zone_height(bp, wx, wz);
+            let contour = ((h / 18.0).rem_euclid(1.0)) < 0.085;
+            let rgb = if h > wall_cutoff {
+                let t = ((h - wall_cutoff) / 140.0).clamp(0.0, 1.0);
+                if contour {
+                    [34, 46, 64]
+                } else {
+                    [
+                        (15.0 + 14.0 * t) as u8,
+                        (20.0 + 16.0 * t) as u8,
+                        (30.0 + 22.0 * t) as u8,
+                    ]
+                }
+            } else {
+                let t = ((h - (bp.biome.base_height - 35.0)) / 95.0).clamp(0.0, 1.0);
+                if contour {
+                    [46, 78, 108]
+                } else {
+                    [
+                        (24.0 + 26.0 * t) as u8,
+                        (40.0 + 38.0 * t) as u8,
+                        (58.0 + 44.0 * t) as u8,
+                    ]
+                }
+            };
+            put_px(buf, img_w, img_h, (px0 + px) as isize, (py0 + py) as isize, rgb);
+        }
+    }
+
+    // 2. Corridor centerline & width bands
+    for edge in &bp.edges {
+        let u = &bp.nodes[edge.from];
+        let v = &bp.nodes[edge.to];
+        let steps = (edge.length / 16.0).ceil() as usize;
+        let col = if edge.is_primary {
+            [72, 148, 224]
+        } else {
+            [52, 104, 162]
+        };
+        for s in 0..=steps.max(1) {
+            let t = (s as f64) / (steps.max(1) as f64);
+            let wx = lerp(u.x, v.x, t);
+            let wz = lerp(u.z, v.z, t);
+            let ix = px0 as isize + ((wx / bp.map_size_x) * (panel_size as f64)) as isize;
+            let iz = py0 as isize + ((wz / bp.map_size_z) * (panel_size as f64)) as isize;
+            for dz in -1..=1 {
+                for dx in -1..=1 {
+                    put_px(buf, img_w, img_h, ix + dx, iz + dz, col);
+                }
+            }
+        }
+    }
+
+    // 3. Room boundary rings, setpiece vaults, and cover pillars
+    for node in &bp.nodes {
+        let (fill, ring_col) = match node.kind {
+            RoomKind::DropZone => ([31, 111, 80], [63, 185, 80]),
+            RoomKind::SalvageField => ([74, 93, 35], [162, 210, 64]),
+            RoomKind::ChokePoint => ([92, 64, 51], [240, 136, 62]),
+            RoomKind::FoundryCache => ([46, 90, 136], [121, 192, 255]),
+            RoomKind::HazardGauntlet => ([122, 46, 46], [255, 123, 114]),
+            RoomKind::SetpieceVault => ([94, 53, 177], [210, 168, 255]),
+            RoomKind::BossArena => ([107, 29, 47], [255, 161, 152]),
+            RoomKind::ExtractionGate => ([23, 133, 119], [86, 212, 221]),
+        };
+        let cx = ((node.x / bp.map_size_x) * (panel_size as f64)) as isize;
+        let cz = ((node.z / bp.map_size_z) * (panel_size as f64)) as isize;
+        let r_px = ((node.radius / bp.map_size_x) * (panel_size as f64)).ceil() as isize;
+        for dz in -r_px..=r_px {
+            for dx in -r_px..=r_px {
+                let d2 = dx * dx + dz * dz;
+                let r2 = r_px * r_px;
+                let inner2 = (r_px - 2).max(0).pow(2);
+                if d2 <= r2 {
+                    let c = if d2 >= inner2 { ring_col } else { fill };
+                    put_px(buf, img_w, img_h, px0 as isize + cx + dx, py0 as isize + cz + dz, c);
+                }
+            }
+        }
+        for pil in &node.pillars {
+            let px_c = ((pil.x / bp.map_size_x) * (panel_size as f64)) as isize;
+            let pz_c = ((pil.z / bp.map_size_z) * (panel_size as f64)) as isize;
+            let pr = (((pil.radius / bp.map_size_x) * (panel_size as f64)).ceil() as isize).max(2);
+            for dz in -pr..=pr {
+                for dx in -pr..=pr {
+                    if dx * dx + dz * dz <= pr * pr {
+                        put_px(
+                            buf,
+                            img_w,
+                            img_h,
+                            px0 as isize + px_c + dx,
+                            py0 as isize + pz_c + dz,
+                            [242, 139, 130],
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Pre-seeded BAR wreckage clusters (standard grey, jackpot gold, reactor crimson)
+    for w in &bp.planned_wrecks {
+        let wx = ((w.x / bp.map_size_x) * (panel_size as f64)) as isize;
+        let wz = ((w.z / bp.map_size_z) * (panel_size as f64)) as isize;
+        let (col, rad) = if w.is_overclocked_reactor {
+            ([255, 82, 82], 2isize)
+        } else if w.is_jackpot {
+            ([251, 188, 4], 2isize)
+        } else {
+            ([185, 194, 204], 1isize)
+        };
+        for dz in -rad..=rad {
+            for dx in -rad..=rad {
+                if dx * dx + dz * dz <= rad * rad {
+                    put_px(buf, img_w, img_h, px0 as isize + wx + dx, py0 as isize + wz + dz, col);
+                }
+            }
+        }
+    }
+}
+
+fn crc32_png(chunk_type: &[u8; 4], data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in chunk_type.iter().chain(data.iter()) {
+        let mut c = (crc ^ (b as u32)) & 0xFF;
+        for _ in 0..8 {
+            c = if (c & 1) != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
+        }
+        crc = (crc >> 8) ^ c;
+    }
+    !crc
+}
+
+fn adler32_zlib(data: &[u8]) -> u32 {
+    let mut s1 = 1u32;
+    let mut s2 = 0u32;
+    for &b in data {
+        s1 = (s1 + (b as u32)) % 65_521;
+        s2 = (s2 + s1) % 65_521;
+    }
+    (s2 << 16) | s1
+}
+
+struct BitWriter {
+    bytes: Vec<u8>,
+    cur: u8,
+    bit_pos: u8,
+}
+
+impl BitWriter {
+    fn new(cap: usize) -> Self {
+        Self {
+            bytes: Vec::with_capacity(cap),
+            cur: 0,
+            bit_pos: 0,
+        }
+    }
+
+    fn write_lsb(&mut self, val: u32, nbits: u8) {
+        for i in 0..nbits {
+            if ((val >> i) & 1) != 0 {
+                self.cur |= 1 << self.bit_pos;
+            }
+            self.bit_pos += 1;
+            if self.bit_pos == 8 {
+                self.bytes.push(self.cur);
+                self.cur = 0;
+                self.bit_pos = 0;
+            }
+        }
+    }
+
+    fn write_msb(&mut self, code: u32, nbits: u8) {
+        for i in (0..nbits).rev() {
+            if ((code >> i) & 1) != 0 {
+                self.cur |= 1 << self.bit_pos;
+            }
+            self.bit_pos += 1;
+            if self.bit_pos == 8 {
+                self.bytes.push(self.cur);
+                self.cur = 0;
+                self.bit_pos = 0;
+            }
+        }
+    }
+
+    fn write_fixed_lit_or_len(&mut self, sym: usize) {
+        if sym <= 143 {
+            self.write_msb(0x30 + (sym as u32), 8);
+        } else if sym <= 255 {
+            self.write_msb(0x190 + ((sym - 144) as u32), 9);
+        } else if sym <= 279 {
+            self.write_msb((sym - 256) as u32, 7);
+        } else {
+            self.write_msb(0xC0 + ((sym - 280) as u32), 8);
+        }
+    }
+
+    fn finish(mut self) -> Vec<u8> {
+        if self.bit_pos > 0 {
+            self.bytes.push(self.cur);
+        }
+        self.bytes
+    }
+}
+
+fn encode_length_code(len: usize) -> (usize, u8, u32) {
+    const BASES: [usize; 29] = [
+        3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115,
+        131, 163, 195, 227, 258,
+    ];
+    const EXTRAS: [u8; 29] = [
+        0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
+    ];
+    if len >= 258 {
+        return (285, 0, 0);
+    }
+    let mut idx = 0;
+    for i in 0..28 {
+        if len >= BASES[i] && len < BASES[i + 1] {
+            idx = i;
+            break;
+        }
+    }
+    (257 + idx, EXTRAS[idx], (len - BASES[idx]) as u32)
+}
+
+fn encode_distance_code(dist: usize) -> (u32, u8, u32) {
+    const BASES: [usize; 30] = [
+        1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537,
+        2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
+    ];
+    const EXTRAS: [u8; 30] = [
+        0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12,
+        13, 13,
+    ];
+    let mut idx = 29;
+    for i in 0..29 {
+        if dist >= BASES[i] && dist < BASES[i + 1] {
+            idx = i;
+            break;
+        }
+    }
+    (idx as u32, EXTRAS[idx], (dist - BASES[idx]) as u32)
+}
+
+fn zlib_compress_fixed_huffman(raw: &[u8]) -> Vec<u8> {
+    let mut bw = BitWriter::new(raw.len() / 2 + 64);
+    // RFC 1950 Zlib header: CMF = 0x78, FLG = 0x9C
+    bw.bytes.push(0x78);
+    bw.bytes.push(0x9C);
+    // RFC 1951 single final block with fixed Huffman codes: BFINAL=1, BTYPE=01
+    bw.write_lsb(1, 1);
+    bw.write_lsb(0b01, 2);
+
+    let mut head = vec![usize::MAX; 4096];
+    let mut prev = vec![usize::MAX; raw.len()];
+    let hash3 = |p: usize| -> usize {
+        (((raw[p] as usize) << 8) ^ ((raw[p + 1] as usize) << 4) ^ (raw[p + 2] as usize)) & 4095
+    };
+
+    let mut pos = 0;
+    while pos < raw.len() {
+        let mut best_len = 0usize;
+        let mut best_dist = 0usize;
+        if pos + 3 <= raw.len() {
+            let h = hash3(pos);
+            let mut cand = head[h];
+            prev[pos] = cand;
+            head[h] = pos;
+            let mut chain = 0;
+            let max_len = (raw.len() - pos).min(258);
+            while cand != usize::MAX && pos - cand <= 32_768 && chain < 24 {
+                if raw[cand + best_len] == raw[pos + best_len] {
+                    let mut l = 0;
+                    while l < max_len && raw[cand + l] == raw[pos + l] {
+                        l += 1;
+                    }
+                    if l >= 3 && l > best_len {
+                        best_len = l;
+                        best_dist = pos - cand;
+                        if l == max_len {
+                            break;
+                        }
+                    }
+                }
+                cand = prev[cand];
+                chain += 1;
+            }
+        }
+        if best_len >= 3 {
+            let (lsym, lextra, lval) = encode_length_code(best_len);
+            bw.write_fixed_lit_or_len(lsym);
+            if lextra > 0 {
+                bw.write_lsb(lval, lextra);
+            }
+            let (dsym, dextra, dval) = encode_distance_code(best_dist);
+            bw.write_msb(dsym, 5);
+            if dextra > 0 {
+                bw.write_lsb(dval, dextra);
+            }
+            for step in 1..best_len {
+                if pos + step + 3 <= raw.len() {
+                    let h = hash3(pos + step);
+                    prev[pos + step] = head[h];
+                    head[h] = pos + step;
+                }
+            }
+            pos += best_len;
+        } else {
+            bw.write_fixed_lit_or_len(raw[pos] as usize);
+            pos += 1;
+        }
+    }
+
+    // End of block (symbol 256)
+    bw.write_fixed_lit_or_len(256);
+    let mut out = bw.finish();
+    out.extend_from_slice(&adler32_zlib(raw).to_be_bytes());
+    out
+}
+
+fn write_png_chunk(out: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    out.extend_from_slice(chunk_type);
+    out.extend_from_slice(data);
+    out.extend_from_slice(&crc32_png(chunk_type, data).to_be_bytes());
+}
+
+pub fn encode_png_rgb(width: usize, height: usize, rgb: &[u8]) -> Vec<u8> {
+    assert_eq!(rgb.len(), width * height * 3);
+    let row_bytes = width * 3;
+    let mut raw_scanlines = Vec::with_capacity((row_bytes + 1) * height);
+    for y in 0..height {
+        raw_scanlines.push(0u8); // Filter type 0 (None)
+        let start = y * row_bytes;
+        raw_scanlines.extend_from_slice(&rgb[start..start + row_bytes]);
+    }
+    let idat_payload = zlib_compress_fixed_huffman(&raw_scanlines);
+
+    let mut png = Vec::with_capacity(idat_payload.len() + 64);
+    png.extend_from_slice(&[137, 80, 78, 71, 13, 10, 26, 10]);
+
+    let mut ihdr = [0u8; 13];
+    ihdr[0..4].copy_from_slice(&(width as u32).to_be_bytes());
+    ihdr[4..8].copy_from_slice(&(height as u32).to_be_bytes());
+    ihdr[8] = 8; // 8 bits per channel
+    ihdr[9] = 2; // Truecolor RGB
+    ihdr[10] = 0;
+    ihdr[11] = 0;
+    ihdr[12] = 0;
+    write_png_chunk(&mut png, b"IHDR", &ihdr);
+    write_png_chunk(&mut png, b"IDAT", &idat_payload);
+    write_png_chunk(&mut png, b"IEND", &[]);
+    png
+}
+
+/// Renders a single zone blueprint into a standalone Truecolor RGB `.png` image.
+pub fn render_png_zone_map(bp: &ZoneBlueprint, size: usize) -> Vec<u8> {
+    let dim = size.max(128);
+    let mut rgb = vec![11u8; dim * dim * 3];
+    rasterize_zone_panel(&mut rgb, dim, dim, 0, 0, dim, bp);
+    encode_png_rgb(dim, dim, &rgb)
+}
+
+/// Compiles a native Truecolor RGB `.png` 8-Biome Procedural Map Atlas (`1240 x 680`).
+pub fn render_png_map_atlas(base_seed: u64) -> Vec<u8> {
+    let width = 1240usize;
+    let height = 680usize;
+    let mut rgb = vec![0u8; width * height * 3];
+    for px in rgb.chunks_exact_mut(3) {
+        px[0] = 11;
+        px[1] = 14;
+        px[2] = 20;
+    }
+
+    let header = format!(
+        "WRECKAGE PROTOCOL - 8-BIOME PROCEDURAL MAP ATLAS (SEED {})",
+        base_seed
+    );
+    draw_text_5x7(&mut rgb, width, height, 20, 12, &header, 2, [88, 166, 255]);
+    draw_text_5x7(
+        &mut rgb,
+        width,
+        height,
+        20,
+        32,
+        "DROP PAD (GREEN) | SALVAGE (OLIVE) | FOUNDRY/VAULT (BLUE/PURPLE) | BOSS (RED) | EXTRACT (TEAL)",
+        1,
+        [139, 148, 158],
+    );
+
+    let panel_size = 264usize;
+    let card_w = 292usize;
+    let card_h = 304usize;
+
+    for depth in 1..=8 {
+        let col = (depth - 1) % 4;
+        let row = (depth - 1) / 4;
+        let cx = 18 + col * (card_w + 12);
+        let cy = 48 + row * (card_h + 12);
+        let bp = build_zone_blueprint(base_seed, depth, 4096.0, 4096.0, None);
+
+        // Card border and background
+        for y in cy..(cy + card_h) {
+            for x in cx..(cx + card_w) {
+                let border = x == cx || x + 1 == cx + card_w || y == cy || y + 1 == cy + card_h;
+                let c = if border { [48, 54, 61] } else { [22, 27, 34] };
+                put_px(&mut rgb, width, height, x as isize, y as isize, c);
+            }
+        }
+
+        let title = format!("Z{}: {}", depth, bp.biome.kind.id());
+        draw_text_5x7(&mut rgb, width, height, cx + 10, cy + 8, &title, 1, [88, 166, 255]);
+        let stats = format!(
+            "R:{} E:{} W:{} V:{}",
+            bp.nodes.len(),
+            bp.edges.len(),
+            bp.planned_wrecks.len(),
+            bp.setpieces.len()
+        );
+        draw_text_5x7(&mut rgb, width, height, cx + 10, cy + 20, &stats, 1, [139, 148, 158]);
+
+        rasterize_zone_panel(&mut rgb, width, height, cx + 14, cy + 32, panel_size, &bp);
+    }
+
+    encode_png_rgb(width, height, &rgb)
+}
+
+fn append_lua_blueprint_table(lua: &mut String, bp: &ZoneBlueprint, indent: &str) {
+    let wall_cutoff = bp.biome.base_height + 90.0;
+    let mut min_elev = f64::MAX;
+    let mut max_elev = f64::MIN;
+    let mut walkable_samples = 0usize;
+    let grid_n = 32usize;
+    for gz in 0..grid_n {
+        for gx in 0..grid_n {
+            let wx = (gx as f64 + 0.5) / (grid_n as f64) * bp.map_size_x;
+            let wz = (gz as f64 + 0.5) / (grid_n as f64) * bp.map_size_z;
+            let h = sample_zone_height(bp, wx, wz);
+            min_elev = min_elev.min(h);
+            max_elev = max_elev.max(h);
+            if h <= wall_cutoff {
+                walkable_samples += 1;
+            }
+        }
+    }
+    let walkable_frac = (walkable_samples as f64) / ((grid_n * grid_n) as f64);
+
+    let _ = writeln!(lua, "{}{{", indent);
+    let _ = writeln!(lua, "{}  seed = {},", indent, bp.seed);
+    let _ = writeln!(lua, "{}  zoneDepth = {},", indent, bp.zone_depth);
+    let _ = writeln!(lua, "{}  biomeId = {:?},", indent, bp.biome.kind.id());
+    let _ = writeln!(lua, "{}  biomeTitle = {:?},", indent, bp.biome.kind.title());
+    let _ = writeln!(lua, "{}  topology = {:?},", indent, bp.biome.kind.topology());
+    let _ = writeln!(lua, "{}  bossUnit = {:?},", indent, bp.biome.boss_unit);
+    let _ = writeln!(lua, "{}  bossTitle = {:?},", indent, bp.biome.boss_title);
+    let _ = writeln!(lua, "{}  mapSizeX = {:.0},", indent, bp.map_size_x);
+    let _ = writeln!(lua, "{}  mapSizeZ = {:.0},", indent, bp.map_size_z);
+    let _ = writeln!(lua, "{}  nodeCount = {},", indent, bp.nodes.len());
+    let _ = writeln!(lua, "{}  wreckCount = {},", indent, bp.planned_wrecks.len());
+    let _ = writeln!(lua, "{}  setpieceCount = {},", indent, bp.setpieces.len());
+    let _ = writeln!(
+        lua,
+        "{}  heightContourSummary = {{ minElev = {:.1}, maxElev = {:.1}, wallCutoff = {:.1}, walkableFraction = {:.3} }},",
+        indent, min_elev, max_elev, wall_cutoff, walkable_frac
+    );
+    let _ = writeln!(lua, "{}  nodes = {{", indent);
+    for n in &bp.nodes {
+        let _ = writeln!(
+            lua,
+            "{}    {{ id = {}, kind = {:?}, x = {:.1}, z = {:.1}, radius = {:.1}, elevation = {:.1}, hasGarage = {}, pillarCount = {} }},",
+            indent,
+            n.id + 1,
+            n.kind.as_str(),
+            n.x,
+            n.z,
+            n.radius,
+            n.elevation,
+            n.has_garage,
+            n.pillars.len()
+        );
+    }
+    let _ = writeln!(lua, "{}  }},", indent);
+    let _ = writeln!(lua, "{}  edges = {{", indent);
+    for e in &bp.edges {
+        let _ = writeln!(
+            lua,
+            "{}    {{ from = {}, to = {}, width = {:.1}, length = {:.1}, slopeDeg = {:.2}, isPrimary = {} }},",
+            indent,
+            e.from + 1,
+            e.to + 1,
+            e.width,
+            e.length,
+            e.slope_deg,
+            e.is_primary
+        );
+    }
+    let _ = writeln!(lua, "{}  }},", indent);
+    let _ = writeln!(lua, "{}  setpieces = {{", indent);
+    for sp in &bp.setpieces {
+        let _ = writeln!(
+            lua,
+            "{}    {{ id = {}, nodeId = {}, kind = {:?}, x = {:.1}, z = {:.1}, radius = {:.1} }},",
+            indent,
+            sp.id,
+            sp.node_id + 1,
+            sp.kind,
+            sp.x,
+            sp.z,
+            sp.radius
+        );
+    }
+    let _ = writeln!(lua, "{}  }},", indent);
+    let _ = writeln!(lua, "{}  plannedWrecks = {{", indent);
+    for w in &bp.planned_wrecks {
+        let _ = writeln!(
+            lua,
+            "{}    {{ nodeId = {}, featureName = {:?}, x = {:.1}, z = {:.1}, isJackpot = {}, isOverclockedReactor = {}, metal = {}, energy = {} }},",
+            indent,
+            w.node_id + 1,
+            w.feature_name,
+            w.x,
+            w.z,
+            w.is_jackpot,
+            w.is_overclocked_reactor,
+            w.metal,
+            w.energy
+        );
+    }
+    let _ = writeln!(lua, "{}  }},", indent);
+    let _ = writeln!(lua, "{}}}", indent);
 }
 
 pub fn export_lua_blueprint(bp: &ZoneBlueprint) -> String {
     let mut lua = String::new();
     let _ = writeln!(lua, "-- Generated by arpg-mapgen (Rust)");
+    lua.push_str("return ");
+    append_lua_blueprint_table(&mut lua, bp, "");
+    let _ = writeln!(lua);
+    lua
+}
+
+/// Compiles a deterministic Recoil/BAR Lua 8-Biome Map Atlas Blueprint dump (`luarules/configs/arpg_map_atlas_blueprints.lua`).
+pub fn export_lua_map_atlas(base_seed: u64) -> String {
+    let mut lua = String::new();
+    let _ = writeln!(
+        lua,
+        "-- luarules/configs/arpg_map_atlas_blueprints.lua"
+    );
+    let _ = writeln!(
+        lua,
+        "-- Deterministic 8-Biome Procedural Map Atlas Blueprints generated by tools/arpg-mapgen (Rust)."
+    );
+    let _ = writeln!(
+        lua,
+        "-- Native Recoil/BAR Lua + PNG/SVG map atlas output (zero HTML/web artifacts)."
+    );
     let _ = writeln!(lua, "return {{");
-    let _ = writeln!(lua, "  seed = {},", bp.seed);
-    let _ = writeln!(lua, "  zoneDepth = {},", bp.zone_depth);
-    let _ = writeln!(lua, "  biomeId = {:?},", bp.biome.kind.id());
-    let _ = writeln!(lua, "  topology = {:?},", bp.biome.kind.topology());
-    let _ = writeln!(lua, "  nodeCount = {},", bp.nodes.len());
-    let _ = writeln!(lua, "  wreckCount = {},", bp.planned_wrecks.len());
-    let _ = writeln!(lua, "  setpieceCount = {},", bp.setpieces.len());
+    let _ = writeln!(lua, "  seed = {},", base_seed);
+    let _ = writeln!(lua, "  generator = \"arpg-mapgen\",");
+    let _ = writeln!(lua, "  atlasPng = \"bitmaps/arpg_icons/arpg_map_atlas.png\",");
+    let _ = writeln!(lua, "  atlasSvg = \"out/arpg_map_atlas.svg\",");
+    let _ = writeln!(lua, "  zones = {{");
+    for depth in 1..=8 {
+        let bp = build_zone_blueprint(base_seed, depth, 4096.0, 4096.0, None);
+        let _ = write!(lua, "    [{}] = ", depth);
+        let mut zone_block = String::new();
+        append_lua_blueprint_table(&mut zone_block, &bp, "    ");
+        lua.push_str(zone_block.trim_start());
+        let _ = writeln!(lua, ",");
+    }
+    let _ = writeln!(lua, "  }},");
     let _ = writeln!(lua, "}}");
     lua
 }
@@ -1157,15 +1932,63 @@ mod tests {
     }
 
     #[test]
-    fn test_deterministic_svg_lua_and_html_atlas_export() {
+    fn test_deterministic_native_svg_png_and_lua_atlas_export() {
         let bp1 = build_zone_blueprint(424_242, 3, 4096.0, 4096.0, None);
         let bp2 = build_zone_blueprint(424_242, 3, 4096.0, 4096.0, None);
         assert_eq!(render_svg_map(&bp1), render_svg_map(&bp2));
         assert_eq!(export_lua_blueprint(&bp1), export_lua_blueprint(&bp2));
-        let atlas = render_html_map_atlas(424_242);
-        assert!(atlas.contains("WRECKAGE PROTOCOL — 8-BIOME PROCEDURAL MAP ATLAS"));
-        assert!(atlas.contains("Molten Slag Smelting Refinery"));
-        assert!(atlas.contains("Sub-Zero Cryo-Computation Vault"));
+
+        let svg_atlas = render_svg_map_atlas(424_242);
+        assert!(svg_atlas.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\""));
+        assert!(!svg_atlas.contains("<!DOCTYPE html"));
+        assert!(!svg_atlas.contains("<html"));
+        assert!(svg_atlas.contains("WRECKAGE PROTOCOL — 8-BIOME PROCEDURAL MAP ATLAS"));
+        assert!(svg_atlas.contains("Molten Slag Smelting Refinery"));
+        assert!(svg_atlas.contains("Sub-Zero Cryo-Computation Vault"));
+
+        let png_atlas = render_png_map_atlas(424_242);
+        assert_eq!(&png_atlas[0..8], &[137, 80, 78, 71, 13, 10, 26, 10]);
+        assert!(png_atlas.len() > 25_000, "PNG atlas should exceed 25 KB byte floor");
+        assert_eq!(png_atlas, render_png_map_atlas(424_242));
+
+        let lua_atlas = export_lua_map_atlas(424_242);
+        assert!(lua_atlas.contains("atlasPng = \"bitmaps/arpg_icons/arpg_map_atlas.png\""));
+        assert!(lua_atlas.contains("biomeId = \"salvage_yard\""));
+        assert!(lua_atlas.contains("biomeId = \"experimental_gantry_citadel\""));
+        assert!(lua_atlas.contains("heightContourSummary"));
+        assert!(lua_atlas.contains("plannedWrecks"));
+
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let repo_root = manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("repo root");
+        let out_png = std::fs::read(repo_root.join("out").join("arpg_map_atlas.png"))
+            .expect("out/arpg_map_atlas.png exists");
+        let vfs_png = std::fs::read(
+            repo_root
+                .join("bitmaps")
+                .join("arpg_icons")
+                .join("arpg_map_atlas.png"),
+        )
+        .expect("bitmaps/arpg_icons/arpg_map_atlas.png exists");
+        let out_svg = std::fs::read_to_string(repo_root.join("out").join("arpg_map_atlas.svg"))
+            .expect("out/arpg_map_atlas.svg exists");
+        let lua_file = std::fs::read_to_string(
+            repo_root
+                .join("luarules")
+                .join("configs")
+                .join("arpg_map_atlas_blueprints.lua"),
+        )
+        .expect("luarules/configs/arpg_map_atlas_blueprints.lua exists");
+
+        assert_eq!(&out_png[0..8], &[137, 80, 78, 71, 13, 10, 26, 10]);
+        assert_eq!(out_png, vfs_png);
+        assert!(out_png.len() > 50_000);
+        assert!(out_svg.starts_with("<svg ") && !out_svg.contains("<html"));
+        assert!(out_svg.len() > 100_000);
+        assert!(lua_file.len() > 50_000 && !lua_file.contains("<html"));
+        assert!(!repo_root.join("out").join("arpg_map_atlas.html").exists());
     }
 
     #[test]

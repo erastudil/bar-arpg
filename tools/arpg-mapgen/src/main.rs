@@ -1,11 +1,29 @@
 use arpg_mapgen::{
-    build_zone_blueprint, export_lua_blueprint, generate_spring_launch_script, render_ascii_map,
-    render_html_map_atlas, render_svg_map, verify_blueprint_and_grid_pathability,
+    build_zone_blueprint, export_lua_blueprint, export_lua_map_atlas, generate_spring_launch_script,
+    render_ascii_map, render_png_map_atlas, render_png_zone_map, render_svg_map,
+    render_svg_map_atlas, verify_blueprint_and_grid_pathability,
 };
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
+
+fn ensure_parent(p: &Path) {
+    if let Some(parent) = p.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = fs::create_dir_all(parent);
+        }
+    }
+}
+
+fn default_repo_root() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -33,21 +51,40 @@ fn main() {
             );
         }
         "atlas" => {
-            let out_path = args
-                .get(2)
-                .map(|s| s.as_str())
-                .unwrap_or("out/arpg_map_atlas.html");
-            let seed: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(424_242);
-            if let Some(parent) = Path::new(out_path).parent() {
-                if !parent.as_os_str().is_empty() {
-                    let _ = fs::create_dir_all(parent);
-                }
+            let repo_root = default_repo_root();
+            let seed: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(424_242);
+
+            let png_bytes = render_png_map_atlas(seed);
+            let svg_text = render_svg_map_atlas(seed);
+            let lua_text = export_lua_map_atlas(seed);
+
+            let out_png = repo_root.join("out/arpg_map_atlas.png");
+            let vfs_png = repo_root.join("bitmaps/arpg_icons/arpg_map_atlas.png");
+            let out_svg = repo_root.join("out/arpg_map_atlas.svg");
+            let out_lua = repo_root.join("luarules/configs/arpg_map_atlas_blueprints.lua");
+
+            for p in [&out_png, &vfs_png, &out_svg, &out_lua] {
+                ensure_parent(p);
             }
-            let html = render_html_map_atlas(seed);
-            fs::write(out_path, html).expect("Failed to write HTML map atlas");
+
+            fs::write(&out_png, &png_bytes).expect("Failed to write out/arpg_map_atlas.png");
+            fs::write(&vfs_png, &png_bytes)
+                .expect("Failed to write bitmaps/arpg_icons/arpg_map_atlas.png");
+            fs::write(&out_svg, &svg_text).expect("Failed to write out/arpg_map_atlas.svg");
+            fs::write(&out_lua, &lua_text)
+                .expect("Failed to write luarules/configs/arpg_map_atlas_blueprints.lua");
+
             println!(
-                "[arpg-mapgen] Generated 8-Biome Interactive Map Atlas at {}",
-                out_path
+                "[arpg-mapgen] Wrote Native 8-Biome Map Atlas (seed={}):\n  PNG : {} ({} bytes)\n  VFS : {} ({} bytes)\n  SVG : {} ({} bytes)\n  LUA : {} ({} bytes)",
+                seed,
+                out_png.display(),
+                png_bytes.len(),
+                vfs_png.display(),
+                png_bytes.len(),
+                out_svg.display(),
+                svg_text.len(),
+                out_lua.display(),
+                lua_text.len()
             );
         }
         "launch-script" => {
@@ -66,11 +103,7 @@ fn main() {
                 .map(|s| s.as_str())
                 .unwrap_or("lazarus_nanite_reanimation");
             let coop: usize = args.get(7).and_then(|s| s.parse().ok()).unwrap_or(1);
-            if let Some(parent) = Path::new(out_path).parent() {
-                if !parent.as_os_str().is_empty() {
-                    let _ = fs::create_dir_all(parent);
-                }
-            }
+            ensure_parent(Path::new(out_path));
             let script = generate_spring_launch_script(seed, biome, chassis, modifier, coop);
             fs::write(out_path, script).expect("Failed to write Spring launch script");
             println!(
@@ -104,12 +137,22 @@ fn main() {
 
             let mut i = 4;
             while i < args.len() {
-                if args[i] == "--svg" && i + 1 < args.len() {
-                    fs::write(&args[i + 1], render_svg_map(&bp)).expect("Failed to write SVG");
+                if args[i] == "--png" && i + 1 < args.len() {
+                    let p = Path::new(&args[i + 1]);
+                    ensure_parent(p);
+                    fs::write(p, render_png_zone_map(&bp, 512)).expect("Failed to write PNG");
+                    println!("Wrote PNG preview to {}", args[i + 1]);
+                    i += 2;
+                } else if args[i] == "--svg" && i + 1 < args.len() {
+                    let p = Path::new(&args[i + 1]);
+                    ensure_parent(p);
+                    fs::write(p, render_svg_map(&bp)).expect("Failed to write SVG");
                     println!("Wrote SVG preview to {}", args[i + 1]);
                     i += 2;
                 } else if args[i] == "--lua" && i + 1 < args.len() {
-                    fs::write(&args[i + 1], export_lua_blueprint(&bp)).expect("Failed to write Lua");
+                    let p = Path::new(&args[i + 1]);
+                    ensure_parent(p);
+                    fs::write(p, export_lua_blueprint(&bp)).expect("Failed to write Lua");
                     println!("Wrote Lua blueprint to {}", args[i + 1]);
                     i += 2;
                 } else {
@@ -118,7 +161,7 @@ fn main() {
             }
         }
         _ => {
-            eprintln!("Usage: arpg-mapgen [verify <count> | atlas <out_html> [seed] | generate <seed> <depth> [--svg <path>] [--lua <path>]]");
+            eprintln!("Usage: arpg-mapgen [verify <count> | atlas [seed] | generate <seed> <depth> [--png <path>] [--svg <path>] [--lua <path>]]");
             process::exit(1);
         }
     }

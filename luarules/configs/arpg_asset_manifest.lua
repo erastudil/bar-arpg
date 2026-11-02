@@ -20,6 +20,12 @@ local ArpgAssetManifest = {
     },
     hud_icons = {
         scrap_and_power_crest = "bitmaps/arpg_icons/arpg_hud_scrap_and_power_crest.png",
+        map_atlas             = "bitmaps/arpg_icons/arpg_map_atlas.png",
+    },
+    map_atlas = {
+        atlas_png        = "bitmaps/arpg_icons/arpg_map_atlas.png",
+        atlas_svg        = "out/arpg_map_atlas.svg",
+        atlas_blueprints = "luarules/configs/arpg_map_atlas_blueprints.lua",
     },
     voice_callouts = {
         wreckage_protocol_init = "sounds/arpg_vo/arpg_wreckage_protocol_init.wav",
