@@ -159,9 +159,140 @@ local function trackCombatWreck(featureID, unitDefName, x, z, spawnFrame)
 	}
 end
 
+-- Muse Letter 011 Addendum 3: Evaluate the Strip-or-Raise Fork on any battlefield wreck
+local function evaluateWreckFork(heroID, featureID)
+	if not heroID or not featureID then
+		return nil, "INVALID_ARGS"
+	end
+	local metalLeft, maxMetal, energyLeft, maxEnergy, reclaimLeft = 150, 150, 80, 80, 1.0
+	if Spring and Spring.GetFeatureResources then
+		local m, mm, e, me, rl = Spring.GetFeatureResources(featureID)
+		if not m then
+			return nil, "WRECK_NOT_FOUND"
+		end
+		metalLeft, maxMetal, energyLeft, maxEnergy, reclaimLeft = m, mm, e, me, rl
+	end
+
+	local mapReg = (GG and GG.ARPG_Map and GG.ARPG_Map.wreckRegistry and GG.ARPG_Map.wreckRegistry[featureID]) or nil
+	local bossReg = bossWrecks[featureID]
+	local subReg = subsystemWrecks[featureID]
+	local lazReg = lazarusWrecks[featureID]
+	local isBossWreck = (bossReg ~= nil) or (mapReg and mapReg.isBossWreck) or false
+	local isSubsystemWreck = (subReg ~= nil) or (mapReg and mapReg.isSubsystemWreck) or false
+	local isOverclockedReactor = (mapReg and mapReg.isOverclockedReactor) or false
+	local isJackpot = isBossWreck or isSubsystemWreck or isOverclockedReactor or (mapReg and mapReg.isJackpot) or false
+
+	local rawDefName = (lazReg and lazReg.unitDefName)
+		or (mapReg and mapReg.unitDefName)
+		or (mapReg and mapReg.featureDefName)
+		or "armpw_dead"
+
+	local zone = GG and GG.ARPG_Map and GG.ARPG_Map.GetCurrentZone and GG.ARPG_Map.GetCurrentZone()
+	local biome = (zone and zone.biome) or Biomes.salvage_yard
+	local stripMaterials = computeMaterialYieldFromMetal(metalLeft or maxMetal or 150, biome, isJackpot)
+
+	local heroState = GG and GG.ARPG_Assembly and GG.ARPG_Assembly.GetHeroState(heroID)
+	local hasRez = GG and GG.ARPG_Assembly and GG.ARPG_Assembly.HasRezAttachment and GG.ARPG_Assembly.HasRezAttachment(heroID) or false
+	local powerUpkeep, resolvedUnitDef = 25, "armpw"
+	if GG and GG.ARPG_Assembly and GG.ARPG_Assembly.ComputeWreckUpkeep then
+		powerUpkeep, resolvedUnitDef = GG.ARPG_Assembly.ComputeWreckUpkeep(rawDefName, maxMetal or 150)
+	end
+
+	local netPowerBefore = (heroState and heroState.budget and heroState.budget.netPower) or 0
+	local netPowerAfter = netPowerBefore - powerUpkeep
+	local canAffordPower = netPowerBefore >= powerUpkeep
+	local canRaise = hasRez and (not isBossWreck) and (not isSubsystemWreck) and (not isOverclockedReactor) and canAffordPower
+	local raiseBlockedReason = nil
+	if not hasRez then
+		raiseBlockedReason = "MISSING_REZ_ATTACHMENT"
+	elseif isBossWreck or isSubsystemWreck or isOverclockedReactor then
+		raiseBlockedReason = "CANNOT_RAISE_SPECIAL_JACKPOT"
+	elseif not canAffordPower then
+		raiseBlockedReason = "INSUFFICIENT_CORE_POWER_BUDGET"
+	end
+
+	return {
+		featureID = featureID,
+		canStrip = true,
+		stripMaterials = stripMaterials,
+		canRaise = canRaise,
+		raiseBlockedReason = raiseBlockedReason,
+		hasRezAttachment = hasRez,
+		canAffordPower = canAffordPower,
+		unitDefName = resolvedUnitDef,
+		powerUpkeep = powerUpkeep,
+		netPowerBefore = netPowerBefore,
+		netPowerAfter = netPowerAfter,
+		metalLeft = metalLeft,
+		maxMetal = maxMetal,
+	}
+end
+
+-- Fork Option B: Spend Core Power Budget to Raise a wreck into your army instead of stripping it for materials
+local function raiseWreck(heroID, featureID)
+	local fork, err = evaluateWreckFork(heroID, featureID)
+	if not fork then
+		return false, err or "WRECK_NOT_FOUND"
+	end
+	if not fork.canRaise then
+		return false, fork.raiseBlockedReason or "CANNOT_RAISE_WRECK"
+	end
+
+	local fx, fy, fz = 2048, 140, 2048
+	if Spring and Spring.GetFeaturePosition then
+		local px, py, pz = Spring.GetFeaturePosition(featureID)
+		if px then
+			fx, fy, fz = px, py or 140, pz
+		end
+	elseif lazarusWrecks[featureID] then
+		fx = lazarusWrecks[featureID].x or 2048
+		fz = lazarusWrecks[featureID].z or 2048
+	end
+
+	-- Clear salvage/reanimation state BEFORE destroying feature so FeatureDestroyed does not award strip materials!
+	activeReclaims[featureID] = nil
+	bossWrecks[featureID] = nil
+	subsystemWrecks[featureID] = nil
+	lazarusWrecks[featureID] = nil
+	if GG and GG.ARPG_Map and GG.ARPG_Map.wreckRegistry then
+		GG.ARPG_Map.wreckRegistry[featureID] = nil
+	end
+	if Spring and Spring.DestroyFeature then
+		Spring.DestroyFeature(featureID)
+	end
+
+	local heroTeam = 0
+	local minionID = nil
+	if Spring and Spring.CreateUnit then
+		minionID = Spring.CreateUnit(fork.unitDefName, fx, fy, fz, 0, heroTeam)
+	end
+	if not minionID then
+		return false, "CREATE_UNIT_FAILED"
+	end
+
+	if GG and GG.ARPG_Assembly and GG.ARPG_Assembly.RegisterRaisedUnit then
+		GG.ARPG_Assembly.RegisterRaisedUnit(heroID, minionID, fork.unitDefName, fork.powerUpkeep, featureID)
+	end
+
+	if Spring and Spring.GiveOrderToUnit and CMD and CMD.MOVE then
+		Spring.GiveOrderToUnit(minionID, CMD.MOVE, { fx + 40, fy, fz + 40 }, {})
+	end
+
+	return true, minionID, fork
+end
+
 function gadget:AllowFeatureBuildStep(builderID, builderTeam, featureID, featureDefID, step)
-	-- Positive step is construction/resurrection; negative step is Reclaim!
-	if step >= 0 then
+	-- Positive step is resurrection; negative step is Reclaim (Strip)!
+	if step > 0 then
+		local fork = evaluateWreckFork(builderID, featureID)
+		if not fork or not fork.canRaise then
+			return false
+		end
+		if lazarusWrecks[featureID] then
+			lazarusWrecks[featureID].beingStripped = true
+		end
+		return true
+	elseif step == 0 then
 		return true
 	end
 
@@ -348,6 +479,25 @@ function gadget:FeatureDestroyed(featureID)
 	end
 end
 
+local salvageGadgetRef = gadget
+
+-- Fork Option A helper: Strip a wreck completely for materials & hull repair
+local function stripWreck(heroID, featureID)
+	local fork, err = evaluateWreckFork(heroID, featureID)
+	if not fork then
+		return false, err or "WRECK_NOT_FOUND"
+	end
+	salvageGadgetRef:AllowFeatureBuildStep(heroID, 0, featureID, 1, -0.5)
+	if Spring and Spring.SetFeatureResources then
+		Spring.SetFeatureResources(featureID, 0, fork.maxMetal or 150, 0, 80, 0.0, 75)
+	end
+	salvageGadgetRef:FeatureDestroyed(featureID)
+	if Spring and Spring.DestroyFeature then
+		Spring.DestroyFeature(featureID)
+	end
+	return true, fork.stripMaterials, fork
+end
+
 -- Wave 6: Lazarus Nanite Reanimation (un-reclaimed wrecks re-assemble after 18s unless stripped via Reclaim)
 function gadget:GameFrame(n)
 	local zone = GG and GG.ARPG_Map and GG.ARPG_Map.GetCurrentZone and GG.ARPG_Map.GetCurrentZone()
@@ -385,6 +535,9 @@ GG.ARPG_Salvage = {
 	RegisterSubsystemWreck = registerSubsystemWreck,
 	TrackCombatWreck = trackCombatWreck,
 	ComputeMaterialYieldFromMetal = computeMaterialYieldFromMetal,
+	EvaluateWreckFork = evaluateWreckFork,
+	RaiseWreck = raiseWreck,
+	StripWreck = stripWreck,
 	GetActiveReclaim = function(featureID)
 		return activeReclaims[featureID]
 	end,

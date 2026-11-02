@@ -1362,6 +1362,33 @@ local Parts = {
 		},
 		desc = "Pinnacle gantry hardware module combining structural reinforcement, thermal conversion, and AoE devastation.",
 	},
+	mod_lazarus_rez_attachment = {
+		id = "mod_lazarus_rez_attachment",
+		slot = "module",
+		name = "Lazarus Necro-Lathe Resurrection Attachment",
+		setFamily = "lazarus_salvage",
+		techTier = 2,
+		requiredBuildPower = 300,
+		mass = 75,
+		powerDraw = 20,
+		stats = {
+			bonusReclaimSpeed = 120,
+			enablesResurrect = true,
+			resurrectSpeed = 380,
+		},
+		ability = {
+			id = "resurrect_wreck_toggle",
+			name = "Raise Wreck (Rez Attachment)",
+			hotkey = "V",
+			cooldownFrames = 30,
+			heatCost = 14,
+			energyCost = 120,
+			radius = 340,
+			desc = "Channels the Necro-Lathe to raise a battlefield wreck into your army instead of stripping it. Every raised unit continuously draws operating MW from your Core Power Budget.",
+		},
+		recipe = { metal = 480, energy = 1350, reclaimed_alloy = 45, servo_actuators = 35, reactor_conductors = 45 },
+		desc = "No summoner class: resurrection is bolted-on constructor hardware. Raises wrecks as allies, but each raised unit draws continuous operating power from your Core Power Budget.",
+	},
 }
 
 local DefaultLoadout = {
@@ -1389,8 +1416,9 @@ local SlotOrder = {
 }
 
 -- Engineering Budget Solver: computes Mass, Heat, Power, Set Bonuses & derived capabilities deterministically
-local function ComputeAssemblyBudget(loadout)
+local function ComputeAssemblyBudget(loadout, raisedPowerDraw)
 	loadout = loadout or DefaultLoadout
+	raisedPowerDraw = math.max(0, tonumber(raisedPowerDraw) or 0)
 	local frame = Parts[loadout.frame] or Parts.frame_constructor_rig
 	local core = Parts[loadout.core] or Parts.core_fission_mk1
 	local loco = Parts[loadout.locomotion] or Parts.loco_servo_biped
@@ -1428,7 +1456,7 @@ local function ComputeAssemblyBudget(loadout)
 	local passiveHeatGen = (core.passiveHeatGen or 0) + (loco.passiveHeatGen or 0)
 
 	local powerOutput = (frame.powerOutput or 0) + (core.powerOutput or 150)
-	local powerDraw = (frame.powerDraw or 20) + (loco.powerDraw or 20) + (wpn1.powerDraw or 15) + (wpn2.powerDraw or 15)
+	local basePowerDraw = (frame.powerDraw or 20) + (loco.powerDraw or 20) + (wpn1.powerDraw or 15) + (wpn2.powerDraw or 15)
 
 	local maxHealth = (frame.stats and frame.stats.maxHealth or 3500) + (loco.stats and loco.stats.bonusMaxHealth or 0)
 	local baseSpeed = frame.stats and frame.stats.baseSpeed or 40.0
@@ -1439,6 +1467,8 @@ local function ComputeAssemblyBudget(loadout)
 	local radarRadius = frame.stats and frame.stats.radarRadius or 700
 	local losRadius = 480
 	local reclaimHealRatio = core.stats and core.stats.reclaimHealRatio or 0.12
+	local canResurrect = false
+	local resurrectSpeed = 0
 
 	local activeAbilities = {}
 
@@ -1446,7 +1476,7 @@ local function ComputeAssemblyBudget(loadout)
 		local mod = modules[idx]
 		if mod then
 			totalMass = totalMass + (mod.mass or 0)
-			powerDraw = powerDraw + (mod.powerDraw or 0)
+			basePowerDraw = basePowerDraw + (mod.powerDraw or 0)
 			if mod.stats then
 				maxHealth = maxHealth + (mod.stats.bonusMaxHealth or 0)
 				speedMult = speedMult * (mod.stats.speedMult or 1.0)
@@ -1454,6 +1484,10 @@ local function ComputeAssemblyBudget(loadout)
 				reclaimSpeed = reclaimSpeed + (mod.stats.bonusReclaimSpeed or 0)
 				radarRadius = radarRadius + (mod.stats.bonusRadarRadius or 0)
 				losRadius = losRadius + (mod.stats.bonusLosRadius or 0)
+				if mod.stats.enablesResurrect then
+					canResurrect = true
+					resurrectSpeed = resurrectSpeed + (mod.stats.resurrectSpeed or 380)
+				end
 			end
 			if mod.ability then
 				activeAbilities[#activeAbilities + 1] = {
@@ -1465,6 +1499,8 @@ local function ComputeAssemblyBudget(loadout)
 			end
 		end
 	end
+
+	local powerDraw = basePowerDraw + raisedPowerDraw
 
 	local weaponDamageMult = ((wpn1.stats and wpn1.stats.damageMult or 1.0) + (wpn2.stats and wpn2.stats.damageMult or 1.0)) * 0.5
 	weaponDamageMult = weaponDamageMult * (1.0 + (core.stats and core.stats.weaponDamageBonus or 0))
@@ -1518,6 +1554,8 @@ local function ComputeAssemblyBudget(loadout)
 		heatDissipation = heatDissipation,
 		passiveHeatGen = passiveHeatGen,
 		powerOutput = powerOutput,
+		basePowerDraw = basePowerDraw,
+		raisedPowerDraw = raisedPowerDraw,
 		powerDraw = powerDraw,
 		netPower = netPower,
 		powerState = powerState,
@@ -1526,6 +1564,8 @@ local function ComputeAssemblyBudget(loadout)
 		speedMult = speedMult,
 		turnRate = math.floor(turnRate),
 		reclaimSpeed = math.floor(reclaimSpeed),
+		canResurrect = canResurrect,
+		resurrectSpeed = math.floor(resurrectSpeed),
 		buildPower = math.floor(buildPower),
 		radarRadius = math.floor(radarRadius),
 		losRadius = math.floor(losRadius),

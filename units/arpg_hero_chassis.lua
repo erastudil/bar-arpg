@@ -17,6 +17,8 @@ return {
 		canreclaim = true,
 		canrepair = true,
 		canrestore = false,
+		canresurrect = true,
+		resurrectspeed = 380,
 		capturable = false,
 		collisionvolumeoffsets = "0 3 0",
 		collisionvolumescales = "30 54 30",

@@ -534,4 +534,90 @@ assertTrue(bossInfo and bossInfo.disabledSubsystems[brokenSubs[1].subsystemId] =
 assertTrue(activeHeroState.inventoryParts[brokenSubs[1].awardPartId] == true, "Reclaiming severed Subsystem Wreck awarded Boss signature part")
 print("[PASS] Test 8: Wave 8 Multi-Phase Boss Subsystem Part-Break & Mid-Fight Wreck Reclaim verified.")
 
+-- ============================================================================
+-- TEST 9: Muse Letter 011 Addendum 3 — Lazarus Rez Attachment, Strip-or-Raise Fork & Core Power Budget Upkeep
+-- ============================================================================
+activeHeroState.unlockedTechTier = 4
+activeHeroState.budget.buildPower = 900
+GG.ARPG_Assembly.AddMaterials(activeHeroID, {
+	reclaimed_alloy = 5000,
+	servo_actuators = 5000,
+	reactor_conductors = 5000,
+	optics_lenses = 5000,
+	experimental_cores = 50,
+})
+-- Reset hero onto compact core_fission_mk1 and un-equip rez attachment first
+GG.ARPG_Assembly.EquipPart(activeHeroID, "core", "core_fission_mk1")
+GG.ARPG_Assembly.EquipPart(activeHeroID, "weapon_primary", "wpn_pulse_laser")
+GG.ARPG_Assembly.EquipPart(activeHeroID, "weapon_secondary", "wpn_plasma_howitzer")
+GG.ARPG_Assembly.EquipPart(activeHeroID, "module_4", "mod_thermal_purge")
+assertTrue(not GG.ARPG_Assembly.HasRezAttachment(activeHeroID), "Without mod_lazarus_rez_attachment bolted on, HasRezAttachment is false")
+
+-- Spawn combat wrecks to test the Strip-or-Raise Fork
+local forkWreckStrip = Spring.CreateFeature("armpw_dead", 2100, 140, 2100, 0, 9)
+local forkWreckRaise1 = Spring.CreateFeature("armpw_dead", 2140, 140, 2100, 0, 9)
+local forkWreckRaise2 = Spring.CreateFeature("armraz_dead", 2180, 140, 2100, 0, 9)
+GG.ARPG_Salvage.TrackCombatWreck(forkWreckStrip, "armpw", 2100, 2100, 200)
+GG.ARPG_Salvage.TrackCombatWreck(forkWreckRaise1, "armpw", 2140, 2100, 200)
+GG.ARPG_Salvage.TrackCombatWreck(forkWreckRaise2, "armraz", 2180, 2100, 200)
+
+-- Verify Raising is blocked when mod_lazarus_rez_attachment is NOT mounted
+local okNoRez, reasonNoRez = GG.ARPG_Salvage.RaiseWreck(activeHeroID, forkWreckRaise1)
+assertTrue(not okNoRez and reasonNoRez == "MISSING_REZ_ATTACHMENT", "Cannot raise a wreck without mod_lazarus_rez_attachment mounted")
+assertTrue(gSalvage:AllowFeatureBuildStep(activeHeroID, 0, forkWreckRaise1, 1, 0.25) == false, "Engine resurrection build step blocked without rez attachment")
+
+-- Machine and bolt on mod_lazarus_rez_attachment into module_4
+local okCraftRez, msgCraftRez = GG.ARPG_Assembly.CraftPart(activeHeroID, "mod_lazarus_rez_attachment")
+assertTrue(okCraftRez, "Machined mod_lazarus_rez_attachment: " .. tostring(msgCraftRez))
+local okEquipRez, msgEquipRez = GG.ARPG_Assembly.EquipPart(activeHeroID, "module_4", "mod_lazarus_rez_attachment")
+assertTrue(okEquipRez, "Bolted mod_lazarus_rez_attachment onto module_4: " .. tostring(msgEquipRez))
+assertTrue(GG.ARPG_Assembly.HasRezAttachment(activeHeroID), "HasRezAttachment is true when mod_lazarus_rez_attachment is bolted on")
+
+-- Inspect the Strip-or-Raise Fork on forkWreckStrip vs forkWreckRaise1
+local forkEval = GG.ARPG_Salvage.EvaluateWreckFork(activeHeroID, forkWreckStrip)
+assertTrue(forkEval and forkEval.canStrip and forkEval.canRaise, "Wreck exposes both Strip (materials) and Raise (minion upkeep) fork options")
+assertTrue(forkEval.powerUpkeep == 25, "armpw wreck priced at 25 MW continuous upkeep")
+
+-- Fork Decision A: STRIP forkWreckStrip for immediate crafting materials
+local alloyBeforeStrip = activeHeroState.materials.reclaimed_alloy
+local okStrip, stripMats = GG.ARPG_Salvage.StripWreck(activeHeroID, forkWreckStrip)
+assertTrue(okStrip and stripMats.reclaimed_alloy > 0, "Stripping wreck yielded immediate crafting materials")
+assertTrue(activeHeroState.materials.reclaimed_alloy > alloyBeforeStrip, "Hero material bank increased from stripping wreck")
+assertTrue(features[forkWreckStrip] == nil, "Stripped wreck consumed from world")
+
+-- Fork Decision B: RAISE forkWreckRaise1 as a minion drawing continuous power from Core Budget
+local alloyBeforeRaise = activeHeroState.materials.reclaimed_alloy
+local netPowerBeforeRaise = activeHeroState.budget.netPower
+local okRaise1, minion1ID, fork1 = GG.ARPG_Salvage.RaiseWreck(activeHeroID, forkWreckRaise1)
+assertTrue(okRaise1 and minion1ID ~= nil, "Raised armpw wreck into player army")
+assertTrue(activeHeroState.materials.reclaimed_alloy == alloyBeforeRaise, "Raising wreck did not grant strip materials (same wreck, two economies)")
+assertTrue(activeHeroState.budget.raisedPowerDraw == 25, "Raised armpw continuously draws 25 MW from Core Power Budget")
+assertTrue(activeHeroState.budget.netPower == netPowerBeforeRaise - 25, "Net Core Power decreased by exact 25 MW minion upkeep")
+
+-- Verify Army Size is a Power-Plant Decision: trying to raise heavy armraz (85 MW upkeep) on small core_fission_mk1 fails when netPower < 85 MW!
+local forkEvalHeavy = GG.ARPG_Salvage.EvaluateWreckFork(activeHeroID, forkWreckRaise2)
+assertTrue(forkEvalHeavy.powerUpkeep == 85, "Heavy armraz wreck requires 85 MW continuous upkeep")
+assertTrue(not forkEvalHeavy.canRaise and forkEvalHeavy.raiseBlockedReason == "INSUFFICIENT_CORE_POWER_BUDGET", "Small fission core lacks net MW to raise additional heavy unit")
+
+-- Upgrade Core through the Build-Power progression ladder (core_fission_mk1 -> core_fusion_afus -> core_singularity_omega)
+local okAfus, msgAfus = GG.ARPG_Assembly.CraftPart(activeHeroID, "core_fusion_afus")
+assertTrue(okAfus, "Machined Tier-3 core_fusion_afus (330 MW): " .. tostring(msgAfus))
+GG.ARPG_Assembly.EquipPart(activeHeroID, "core", "core_fusion_afus")
+local okOmega, msgOmega = GG.ARPG_Assembly.CraftPart(activeHeroID, "core_singularity_omega")
+assertTrue(okOmega, "Machined Tier-4 core_singularity_omega (420 MW): " .. tostring(msgOmega))
+GG.ARPG_Assembly.EquipPart(activeHeroID, "core", "core_singularity_omega")
+local okRaise2, minion2ID = GG.ARPG_Salvage.RaiseWreck(activeHeroID, forkWreckRaise2)
+assertTrue(okRaise2 and minion2ID ~= nil, "Upgrading to 420 MW Singularity Core enabled raising heavy armraz minion")
+assertTrue(activeHeroState.budget.raisedPowerDraw == 25 + 85, "Both raised units draw 110 MW continuous total upkeep from Core Budget")
+
+-- Verify minion destruction immediately frees its continuous power draw
+gAssembly:UnitDestroyed(minion1ID, 3, 0, 999)
+Spring.DestroyUnit(minion1ID)
+assertTrue(activeHeroState.budget.raisedPowerDraw == 85, "Destroying raised armpw freed 25 MW from Core Power Budget")
+
+-- Verify un-equipping mod_lazarus_rez_attachment de-energizes remaining raised units and frees all upkeep
+GG.ARPG_Assembly.EquipPart(activeHeroID, "module_4", "mod_thermal_purge")
+assertTrue(activeHeroState.budget.raisedPowerDraw == 0 and #GG.ARPG_Assembly.GetRaisedUnits(activeHeroID) == 0, "Un-equipping rez attachment decommissioned raised minions and freed upkeep")
+print("[PASS] Test 9: Lazarus Rez Attachment (mod_lazarus_rez_attachment), Strip-or-Raise Wreck Fork, and Continuous Core Power Upkeep verified.")
+
 print("ALL BAR SCI-FI ARPG INTEGRATION TESTS PASSED (EXIT 0)")

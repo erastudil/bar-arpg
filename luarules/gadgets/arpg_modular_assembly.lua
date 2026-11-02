@@ -30,7 +30,8 @@ end
 local SOURCE_ASSEMBLY = "arpg_modular_assembly"
 local SOURCE_UNIQUE_WPN = "arpg_unique_weapon"
 
-local heroAssemblies = {} -- [unitID] = { loadout, budget, inventoryParts, materials, unlockedTechTier, heat, maxHeat }
+local heroAssemblies = {} -- [unitID] = { loadout, budget, inventoryParts, materials, unlockedTechTier, heat, maxHeat, raisedUnits, raisedPowerDraw }
+local minionOwnerByUnitID = {} -- [minionUnitID] = heroUnitID
 local activeUniqueEffects = {
 	massless = {}, -- [unitID] = { expireFrame, origMass }
 	scrambled = {}, -- [unitID] = { expireFrame, origTeam, attackerID }
@@ -47,6 +48,55 @@ local function copyTable(src)
 	return out
 end
 
+local function computeWreckUpkeep(unitDefName, metalValue)
+	local def = tostring(unitDefName or "armpw")
+	if string.sub(def, -5) == "_dead" then
+		def = string.sub(def, 1, -6)
+	elseif string.sub(def, -5) == "_heap" then
+		def = string.sub(def, 1, -6)
+	end
+
+	local presetUpkeep = {
+		armpw = 25,
+		corak = 25,
+		armllt = 30,
+		armzeus = 45,
+		armraz = 85,
+		corshiva = 85,
+		armvang = 95,
+		armthor = 110,
+		armbanth = 135,
+		corjugg = 150,
+		corkorg = 165,
+	}
+	if presetUpkeep[def] then
+		return presetUpkeep[def], def
+	end
+	local m = tonumber(metalValue) or 150
+	return math.max(20, math.floor(m * 0.18)), def
+end
+
+local function recomputeRaisedPowerDraw(state)
+	local total = 0
+	local count = 0
+	if state and state.raisedUnits then
+		for minionID, info in pairs(state.raisedUnits) do
+			if Spring and Spring.ValidUnitID and not Spring.ValidUnitID(minionID) then
+				state.raisedUnits[minionID] = nil
+				minionOwnerByUnitID[minionID] = nil
+			else
+				total = total + (info.powerUpkeep or 0)
+				count = count + 1
+			end
+		end
+	end
+	if state then
+		state.raisedPowerDraw = total
+		state.raisedUnitCount = count
+	end
+	return total, count
+end
+
 local function syncAssemblyRulesParams(unitID, state)
 	if not Spring or not Spring.SetUnitRulesParam then
 		return
@@ -60,6 +110,10 @@ local function syncAssemblyRulesParams(unitID, state)
 	Spring.SetUnitRulesParam(unitID, "arpg_heat_diss", b.heatDissipation)
 	Spring.SetUnitRulesParam(unitID, "arpg_power_out", b.powerOutput)
 	Spring.SetUnitRulesParam(unitID, "arpg_power_draw", b.powerDraw)
+	Spring.SetUnitRulesParam(unitID, "arpg_base_power_draw", b.basePowerDraw or b.powerDraw)
+	Spring.SetUnitRulesParam(unitID, "arpg_raised_power_draw", b.raisedPowerDraw or 0)
+	Spring.SetUnitRulesParam(unitID, "arpg_raised_unit_count", state.raisedUnitCount or 0)
+	Spring.SetUnitRulesParam(unitID, "arpg_can_resurrect", b.canResurrect and 1 or 0)
 	Spring.SetUnitRulesParam(unitID, "arpg_power_net", b.netPower)
 	Spring.SetUnitRulesParam(unitID, "arpg_power_state", b.powerState)
 	Spring.SetUnitRulesParam(unitID, "arpg_build_power", b.buildPower)
@@ -91,9 +145,25 @@ local function syncAssemblyRulesParams(unitID, state)
 end
 
 local function applyAssemblyToUnit(unitID, state)
-	local b = ComputeAssemblyBudget(state.loadout)
+	recomputeRaisedPowerDraw(state)
+	local b = ComputeAssemblyBudget(state.loadout, state.raisedPowerDraw)
 	state.budget = b
 	state.maxHeat = b.heatCapacity
+
+	-- If the Lazarus Rez Attachment was unmounted while raised units exist, de-energize them
+	if not b.canResurrect and (state.raisedUnitCount or 0) > 0 then
+		for minionID, _ in pairs(state.raisedUnits or {}) do
+			state.raisedUnits[minionID] = nil
+			minionOwnerByUnitID[minionID] = nil
+			if Spring and Spring.DestroyUnit then
+				Spring.DestroyUnit(minionID, false, true)
+			end
+		end
+		state.raisedPowerDraw = 0
+		state.raisedUnitCount = 0
+		b = ComputeAssemblyBudget(state.loadout, 0)
+		state.budget = b
+	end
 
 	-- Apply via BAR's GG.UnitAttributes if loaded
 	if GG and GG.UnitAttributes then
@@ -122,7 +192,8 @@ local function applyAssemblyToUnit(unitID, state)
 			Spring.SetUnitHealth(unitID, math.min(b.maxHealth, math.max(1, b.maxHealth * ratio)))
 		end
 		if Spring.SetUnitBuildSpeed then
-			Spring.SetUnitBuildSpeed(unitID, b.buildPower, b.buildPower, b.reclaimSpeed, b.buildPower, b.buildPower)
+			local rezSpd = b.canResurrect and b.resurrectSpeed or 0
+			Spring.SetUnitBuildSpeed(unitID, b.buildPower, b.buildPower, b.reclaimSpeed, b.buildPower, b.buildPower, rezSpd)
 		end
 		if Spring.SetUnitMass then
 			Spring.SetUnitMass(unitID, b.totalMass)
@@ -164,10 +235,80 @@ local function initHeroAssembly(unitID, initialState)
 		heat = 0.0,
 		maxHeat = 130.0,
 		overheatedUntilFrame = 0,
+		raisedUnits = {},
+		raisedPowerDraw = 0,
+		raisedUnitCount = 0,
 	}
 	heroAssemblies[unitID] = state
 	applyAssemblyToUnit(unitID, state)
 	return state
+end
+
+local function hasRezAttachment(unitID)
+	local state = heroAssemblies[unitID]
+	return (state and state.budget and state.budget.canResurrect == true) or false
+end
+
+local function registerRaisedUnit(heroID, minionID, unitDefName, powerUpkeep, sourceFeatureID)
+	local state = heroAssemblies[heroID]
+	if not state or not minionID then
+		return false, "NO_HERO_STATE"
+	end
+	if not hasRezAttachment(heroID) then
+		return false, "MISSING_REZ_ATTACHMENT"
+	end
+	local upkeep = tonumber(powerUpkeep)
+	if not upkeep then
+		upkeep = computeWreckUpkeep(unitDefName, 150)
+	end
+	local frame = (Spring and Spring.GetGameFrame and Spring.GetGameFrame()) or 0
+	state.raisedUnits[minionID] = {
+		unitID = minionID,
+		heroID = heroID,
+		unitDefName = unitDefName or "armpw",
+		powerUpkeep = upkeep,
+		sourceFeatureID = sourceFeatureID,
+		raisedFrame = frame,
+	}
+	minionOwnerByUnitID[minionID] = heroID
+	if Spring and Spring.SetUnitRulesParam then
+		Spring.SetUnitRulesParam(minionID, "arpg_raised_by", heroID)
+		Spring.SetUnitRulesParam(minionID, "arpg_power_upkeep", upkeep)
+	end
+	applyAssemblyToUnit(heroID, state)
+	return true, state.budget
+end
+
+local function unregisterRaisedUnit(heroID, minionID)
+	local ownerID = heroID or minionOwnerByUnitID[minionID]
+	local state = ownerID and heroAssemblies[ownerID]
+	if not state or not state.raisedUnits[minionID] then
+		return false
+	end
+	state.raisedUnits[minionID] = nil
+	minionOwnerByUnitID[minionID] = nil
+	applyAssemblyToUnit(ownerID, state)
+	return true
+end
+
+local function getRaisedUnits(heroID)
+	local state = heroAssemblies[heroID]
+	if not state or not state.raisedUnits then
+		return {}
+	end
+	local list = {}
+	for _, info in pairs(state.raisedUnits) do
+		list[#list + 1] = info
+	end
+	return list
+end
+
+local function getRaisedPowerDraw(heroID)
+	local state = heroAssemblies[heroID]
+	if not state then
+		return 0, 0
+	end
+	return recomputeRaisedPowerDraw(state)
 end
 
 local function addMaterials(unitID, matDelta)
@@ -473,6 +614,13 @@ function gadget:GameFrame(frame)
 	end
 end
 
+function gadget:UnitDestroyed(unitID, unitDefID, unitTeam, attackerID)
+	local ownerHeroID = minionOwnerByUnitID[unitID]
+	if ownerHeroID then
+		unregisterRaisedUnit(ownerHeroID, unitID)
+	end
+end
+
 GG = GG or {}
 GG.ARPG_Assembly = {
 	InitHeroAssembly = initHeroAssembly,
@@ -485,6 +633,12 @@ GG.ARPG_Assembly = {
 	CraftPart = craftPart,
 	ApplyAssemblyToUnit = applyAssemblyToUnit,
 	ApplyUniqueWeaponEffect = applyUniqueWeaponEffect,
+	HasRezAttachment = hasRezAttachment,
+	ComputeWreckUpkeep = computeWreckUpkeep,
+	RegisterRaisedUnit = registerRaisedUnit,
+	UnregisterRaisedUnit = unregisterRaisedUnit,
+	GetRaisedUnits = getRaisedUnits,
+	GetRaisedPowerDraw = getRaisedPowerDraw,
 }
 
 return GG.ARPG_Assembly

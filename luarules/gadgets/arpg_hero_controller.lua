@@ -209,6 +209,18 @@ local function activateModuleAbility(unitID, slotIdx, targetX, targetZ)
 		end
 	elseif ab.id == "siege_bastion_field" then
 		rt.bastionUntilFrame = frame + (ab.durationFrames or 150)
+	elseif ab.id == "resurrect_wreck_toggle" then
+		if Spring and Spring.GetFeaturesInCylinder and GG and GG.ARPG_Salvage and GG.ARPG_Salvage.RaiseWreck then
+			local nearFeatures = Spring.GetFeaturesInCylinder(ux, uz, ab.radius or 340)
+			if nearFeatures and #nearFeatures > 0 then
+				local okR, resR = GG.ARPG_Salvage.RaiseWreck(unitID, nearFeatures[1])
+				if not okR then
+					return false, resR
+				end
+			else
+				return false, "NO_WRECK_IN_RANGE"
+			end
+		end
 	end
 
 	if Spring and Spring.SetUnitRulesParam then
@@ -279,6 +291,16 @@ function gadget:RecvLuaMsg(msg, playerID)
 				local features = Spring.GetFeaturesInCylinder(ux, uz, 340)
 				if features and #features > 0 then
 					Spring.GiveOrderToUnit(heroID, CMD.RECLAIM, { Game.maxUnits + features[1] }, {})
+				end
+			end
+		end
+	elseif cmd == "raise_nearest" then
+		if Spring and Spring.GetUnitPosition and Spring.GetFeaturesInCylinder and GG and GG.ARPG_Salvage and GG.ARPG_Salvage.RaiseWreck then
+			local ux, _, uz = Spring.GetUnitPosition(heroID)
+			if ux then
+				local nearFeatures = Spring.GetFeaturesInCylinder(ux, uz, 340)
+				if nearFeatures and #nearFeatures > 0 then
+					GG.ARPG_Salvage.RaiseWreck(heroID, nearFeatures[1])
 				end
 			end
 		end
