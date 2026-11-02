@@ -48,8 +48,13 @@ local function startZone(seed, depth, preserveHeroState)
 	runState.bossWreckSalvaged = false
 
 	local bp = nil
-	if GG and GG.ARPG_Map and GG.ARPG_Map.GenerateZone then
-		bp = GG.ARPG_Map.GenerateZone(runState.runSeed, runState.zoneDepth, nil)
+	if GG and GG.ARPG_Map then
+		local existing = GG.ARPG_Map.GetCurrentZone and GG.ARPG_Map.GetCurrentZone()
+		if existing and existing.seed == runState.runSeed and existing.zoneDepth == runState.zoneDepth then
+			bp = existing
+		elseif GG.ARPG_Map.GenerateZone then
+			bp = GG.ARPG_Map.GenerateZone(runState.runSeed, runState.zoneDepth, nil)
+		end
 	end
 	if GG and GG.ARPG_Hero and GG.ARPG_Hero.SpawnOrRelocateHero then
 		GG.ARPG_Hero.SpawnOrRelocateHero(0, preserveHeroState)

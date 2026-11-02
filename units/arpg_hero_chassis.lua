@@ -93,7 +93,7 @@ return {
 			explosiongenerators = {
 				[1] = "custom:barrelshot-medium",
 				[2] = "custom:footstep-medium",
-				[3] = "custom:Generic_Muzzle_Charge",
+				[3] = "custom:com_sea_laser_bubbles",
 			},
 		},
 		weapondefs = {
@@ -134,7 +134,6 @@ return {
 			arpg_secondary_mount = {
 				areaofeffect = 72,
 				avoidfeature = false,
-				cegtag = "plasma-trail-medium",
 				craterareaofeffect = 48,
 				craterboost = 0,
 				cratermult = 0,

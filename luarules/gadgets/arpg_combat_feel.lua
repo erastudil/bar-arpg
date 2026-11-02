@@ -105,7 +105,7 @@ function gadget:UnitDestroyed(unitID, unitDefID, unitTeam, attackerID)
 
 	-- Spawn crisp death pop CEG and micro screen-shake
 	if Spring and Spring.SpawnCEG then
-		Spring.SpawnCEG("custom:barrelshot-medium", ux, uy + 16, uz, 0, 1, 0, 20, 0)
+		Spring.SpawnCEG("barrelshot-medium", ux, uy + 16, uz, 0, 1, 0, 20, 0)
 	end
 	pushCombatEvent("kill_pop", ux, uy + 32, uz, 0, "WRECKED!")
 	addScreenShake(2.5)

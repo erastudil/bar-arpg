@@ -3,6 +3,21 @@
 -- Covers Waves 1-5: 8 Biomes, Setpiece Vaults, 64-Part AC Garage, 6 Signature Unique Weapons,
 -- Part Family Set Bonuses, Reclaim-as-Loot, Combat Feel, Save/Load Persistence, and 1-4P Co-Op.
 
+if gadget and type(gadget) == "table" then
+	function gadget:GetInfo()
+		return {
+			name = "ARPG Integration Test Suite (CLI Only)",
+			desc = "Offline deterministic verification runner (luatex --luaonly); disabled in live engine",
+			author = "Argon",
+			date = "2026-11-01",
+			license = "GNU GPL, v2 or later",
+			layer = 9999,
+			enabled = false,
+		}
+	end
+	return false
+end
+
 local function assertTrue(cond, msg)
 	if not cond then
 		error("ASSERTION FAILED: " .. tostring(msg), 2)

@@ -25,6 +25,10 @@ local SetpieceTypes = BiomeConfig.SetpieceTypes
 local ZoneModifiers = BiomeConfig.ZoneModifiers or {}
 local ZoneModifierSequence = BiomeConfig.ZoneModifierSequence or { "lazarus_nanite_reanimation" }
 
+if gadgetHandler and not gadgetHandler:IsSyncedCode() then
+	return false
+end
+
 -- ============================================================================
 -- Deterministic PRNG (Bit-exact across Lua 5.1 / LuaJIT / Lua 5.3)
 -- ============================================================================
