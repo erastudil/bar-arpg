@@ -1,0 +1,65 @@
+[GAME]
+{
+	MapName=Quicksilver Remake 1.24;
+	GameType=Beyond All Reason - Wreckage Protocol ARPG 1.0;
+	StartPosType=2;
+	HostIP=127.0.0.1;
+	HostPort=8452;
+	MyPlayerName=Operator;
+	IsHost=1;
+
+	[MODOPTIONS]
+	{
+		arpg_seed=424242;
+		arpg_starting_biome=salvage_yard;
+		arpg_starting_chassis=frame_assault_medium;
+		arpg_zone_modifier=lazarus_nanite_reanimation;
+		arpg_coop_players=2;
+	}
+
+	[PLAYER0]
+	{
+		Name=Operator_1;
+		Team=0;
+		Spectator=0;
+	}
+	[TEAM0]
+	{
+		TeamLeader=0;
+		AllyTeam=0;
+		Side=Armada;
+	}
+	[PLAYER1]
+	{
+		Name=Operator_2;
+		Team=1;
+		Spectator=0;
+	}
+	[TEAM1]
+	{
+		TeamLeader=1;
+		AllyTeam=0;
+		Side=Armada;
+	}
+	[AI0]
+	{
+		Name=WreckageDirector;
+		ShortName=NullAI;
+		Team=2;
+		Host=0;
+	}
+	[TEAM2]
+	{
+		TeamLeader=0;
+		AllyTeam=1;
+		Side=Cortex;
+	}
+	[ALLYTEAM0]
+	{
+		NumAllies=0;
+	}
+	[ALLYTEAM1]
+	{
+		NumAllies=0;
+	}
+}
